@@ -1,0 +1,9 @@
+#!/bin/bash
+#
+# Wachhund fuer den Wachhund: laeuft der Dienst nicht, wird er gestartet.
+# Das ist keine Doppelung des Dienstes selbst - es faengt den Fall ab, dass
+# der Dienst durch einen Neustart des Systems oder einen Absturz weg ist.
+
+SELF=$(cd "$(dirname "$(readlink -f "$0")")" && pwd)
+BASE=$(cd "$SELF/../.." && pwd)
+exec "$BASE/bin/plugins/funkwacht/dienst.sh" start >/dev/null 2>&1

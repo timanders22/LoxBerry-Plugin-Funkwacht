@@ -1,0 +1,15 @@
+# Diese Pakete installiert LoxBerry mit "apt-get -y install" - und zwar als
+# root, waehrend der Plugin-Installation.
+#
+# WARUM DAS HIER STEHT UND NICHT IN postinstall.sh:
+# postinstall.sh laeuft als Benutzer loxberry. Ein "apt-get install" dort
+# scheitert mangels Rechten - immer, still, und mit einem Hinweistext, den man
+# leicht ueberliest. Diese Liste ist der vorgesehene Weg.
+#
+# uhubctl wird nur fuer die dritte Stufe gebraucht (Strom am Verteiler
+# nehmen). Fehlt es, laufen Stufe 1 und 2 unveraendert weiter; der Reiter
+# Test sagt dann ausdruecklich, dass Stufe 3 nicht zur Verfuegung steht.
+# Wichtig: uhubctl schaltet nur an Verteilern, die Portstrom koennen. Der
+# eingebaute Verteiler des Raspberry Pi 4 kann es NICHT - das Paket allein
+# beweist also nichts, deshalb misst der Reiter Test nach.
+uhubctl

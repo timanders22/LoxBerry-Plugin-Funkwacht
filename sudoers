@@ -1,0 +1,21 @@
+# Funkwacht - genau die Befehle, die zum Heilen gebraucht werden.
+#
+# Absichtlich KEIN uneingeschraenktes ALL und kein "sh -c": der Dienst laeuft
+# als loxberry, und kein Wert aus der Konfiguration - ein Dienstname, ein
+# USB-Pfad - soll zu einem zweiten Befehl werden koennen. Der USB-Pfad geht
+# ueber die Standardeingabe an tee, steht also gar nicht in der Befehlszeile.
+#
+# Mehrere Kandidaten je Werkzeug, weil /bin und /usr/bin auf Debian 12
+# zusammengelegt sind, auf aelteren Systemen aber nicht. sudo loest den
+# Befehl ueber PATH auf und vergleicht dann den vollstaendigen Pfad; ein
+# Eintrag ohne Argumente erlaubt AUCH NUR den Aufruf ohne Argumente.
+loxberry ALL=(root) NOPASSWD: /bin/systemctl restart *
+loxberry ALL=(root) NOPASSWD: /usr/bin/systemctl restart *
+loxberry ALL=(root) NOPASSWD: /usr/bin/docker restart *
+loxberry ALL=(root) NOPASSWD: /usr/sbin/uhubctl -l * -p * -a *
+loxberry ALL=(root) NOPASSWD: /usr/bin/uhubctl -l * -p * -a *
+loxberry ALL=(root) NOPASSWD: /usr/local/bin/uhubctl -l * -p * -a *
+loxberry ALL=(root) NOPASSWD: /usr/bin/tee /sys/bus/usb/drivers/usb/unbind
+loxberry ALL=(root) NOPASSWD: /usr/bin/tee /sys/bus/usb/drivers/usb/bind
+loxberry ALL=(root) NOPASSWD: /bin/tee /sys/bus/usb/drivers/usb/unbind
+loxberry ALL=(root) NOPASSWD: /bin/tee /sys/bus/usb/drivers/usb/bind

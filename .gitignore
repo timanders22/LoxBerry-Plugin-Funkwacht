@@ -1,0 +1,10 @@
+# Uebersetzte Python-Zwischenstaende und Editorreste gehoeren nicht ins Paket.
+__pycache__/
+*.pyc
+*.pyo
+
+# Betriebssystem- und Editorreste
+.DS_Store
+Thumbs.db
+*~
+*.swp
