@@ -29,6 +29,46 @@ if [ -f "$CF" ]; then
         && echo "<OK> Konfiguration gesichert."
 fi
 
+# ---------- Den Bestand retten ----------
+# GEMESSEN an sbin/plugininstall.pl (Zweig master, 23.08.2026): der Installer
+# ruft &purge_installation NICHT nur beim Deinstallieren, sondern auch im
+# Upgrade-Zweig (:886, unmittelbar nach diesem Skript) - und deren Rumpf
+# raeumt ohne jede Bedingung ab (:1629 ff.):
+#     rm -rf config/plugins/<f>/   bin/plugins/<f>/   data/plugins/<f>/
+# Damit waeren historie.json und die Tagesdateien nach JEDER Aktualisierung
+# weg: die Zaehler faengen bei null an, der 30-Tage-Balken ist leer, und ein
+# dauerhaft defekter Stick bekommt frische Versuche. Genau der Fehler, den
+# 0.9.4 eine Ebene tiefer behoben hat (Zaehler in stand.json).
+#
+# Der Ordner mit dem Punkt liegt NEBEN dem Ordner: "rm -rf .../$PFOLDER/"
+# trifft ihn nicht. uninstall raeumt ihn selbst weg.
+BEST="$BASE/data/plugins/$PFOLDER.bestand"
+PDATA="$BASE/data/plugins/$PFOLDER"
+if [ -d "$PDATA" ]; then
+    mkdir -p "$BEST" 2>/dev/null
+    GERETTET=""
+    # stand.json wird mitgenommen, weil postinstall daraus einmalig die
+    # Zaehler einer 0.9.3 uebernimmt - ohne Rettung waere die Datei dort
+    # laengst geloescht und der Umstieg liefe ins Leere.
+    for F in historie.json stand.json faehigkeit.json; do
+        [ -f "$PDATA/$F" ] && cp -p "$PDATA/$F" "$BEST/$F" 2>/dev/null \
+            && GERETTET="$GERETTET $F"
+    done
+    if [ -d "$PDATA/verlauf" ]; then
+        rm -rf "$BEST/verlauf" 2>/dev/null
+        cp -rp "$PDATA/verlauf" "$BEST/verlauf" 2>/dev/null \
+            && GERETTET="$GERETTET verlauf/"
+    fi
+    # Die Wirkung pruefen, nicht den Rueckgabewert: liegt hinterher wirklich
+    # etwas da?
+    if [ -n "$(ls -A "$BEST" 2>/dev/null)" ]; then
+        echo "<OK> Bestand gesichert:$GERETTET"
+    elif [ -f "$PDATA/historie.json" ]; then
+        echo "<INFO> Der Bestand konnte nicht gesichert werden - Zaehler und"
+        echo "<INFO> Verlauf beginnen nach dieser Aktualisierung bei null."
+    fi
+fi
+
 # Den Dienst anhalten, BEVOR seine Dateien ersetzt werden. Ein laufender
 # Prozess, dessen Quelltext unter ihm ausgetauscht wird, ist eine Wette;
 # postinstall.sh startet ihn hinterher ohnehin neu.

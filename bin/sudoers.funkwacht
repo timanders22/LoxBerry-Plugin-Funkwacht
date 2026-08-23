@@ -15,6 +15,16 @@ loxberry ALL=(root) NOPASSWD: /usr/bin/docker restart *
 loxberry ALL=(root) NOPASSWD: /usr/sbin/uhubctl -l * -p * -a *
 loxberry ALL=(root) NOPASSWD: /usr/bin/uhubctl -l * -p * -a *
 loxberry ALL=(root) NOPASSWD: /usr/local/bin/uhubctl -l * -p * -a *
+# Der BLOSSE uhubctl-Aufruf zaehlt die Verteiler auf und sagt, welche davon
+# den Portstrom schalten koennen (Merkmal "ppps"). Das braucht auf den
+# meisten Systemen Root-Rechte - und weil die Zeile bis 0.9.3 fehlte, hat der
+# wichtigste Knopf des Plugins ohne Rechte gefragt und im Zweifel gemeldet,
+# kein Verteiler koenne Portstrom. Ein rotes Kreuz, das nichts bedeutet, ist
+# schlimmer als keine Pruefung. Der Aufruf ohne Argumente SCHALTET NICHTS: er
+# liest nur.
+loxberry ALL=(root) NOPASSWD: /usr/sbin/uhubctl
+loxberry ALL=(root) NOPASSWD: /usr/bin/uhubctl
+loxberry ALL=(root) NOPASSWD: /usr/local/bin/uhubctl
 loxberry ALL=(root) NOPASSWD: /usr/bin/tee /sys/bus/usb/drivers/usb/unbind
 loxberry ALL=(root) NOPASSWD: /usr/bin/tee /sys/bus/usb/drivers/usb/bind
 loxberry ALL=(root) NOPASSWD: /bin/tee /sys/bus/usb/drivers/usb/unbind

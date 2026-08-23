@@ -1,6 +1,15 @@
 #!/bin/bash
 #
-# Funkwacht - Dienst starten, anhalten, nachsehen
+# Funkwacht - Dienste starten, anhalten, nachsehen
+#
+# Es sind ZWEI Prozesse:
+#   funkwacht_dienst.py   der Waechter - misst, urteilt, heilt
+#   fw_mqtt.py            der Mithoerer - schreibt die Zeitstempel je Thema
+#
+# Der Mithoerer laeuft nur, wenn ueberhaupt ein Stick auf die Art MQTT
+# eingerichtet ist; er beendet sich sonst von selbst und sagt es im
+# Protokoll. Getrennt sind sie, weil ein haengender Broker sonst den
+# Waechter mit anhielte - und der soll gerade dann messen, wenn etwas klemmt.
 #
 # Den eigenen Ort ueber readlink -f bestimmen: LoxBerry legt bin/plugins/<x>
 # haeufig als Verweis an. Ohne readlink zeigt dirname "$0" auf den Verweis,
@@ -8,46 +17,100 @@
 
 SELF=$(cd "$(dirname "$(readlink -f "$0")")" && pwd)
 BASE=$(cd "$SELF/../../.." && pwd)       # von bin/plugins/<x> zur LoxBerry-Wurzel
-PLUGIN=funkwacht
+
+# Den Ordnernamen NICHT festschreiben, sondern dort ablesen, wo das Skript
+# wirklich liegt. Beansprucht ein zweites Plugin denselben FOLDER, installiert
+# LoxBerry es nach "funkwacht01" - ein hartes "funkwacht" zeigte dann auf das
+# Verzeichnis des fremden Plugins. Steht die Umgebungsvariable schon, gilt sie.
+PLUGIN="${LBPPLUGINDIR:-$(basename "$SELF")}"
+case "$PLUGIN" in
+    bin|plugins|""|.|/) PLUGIN=funkwacht ;;
+esac
+# Beide Python-Prozesse leiten ihre Pfade daraus ab - eine Wahrheit, nicht zwei.
+export LBPPLUGINDIR="$PLUGIN"
+export LBHOMEDIR="${LBHOMEDIR:-$BASE}"
 
 DATA="$BASE/data/plugins/$PLUGIN"
 LOG="$BASE/log/plugins/$PLUGIN"
-PIDF="$DATA/dienst.pid"
 PY=$(command -v python3 || echo /usr/bin/python3)
 
 mkdir -p "$DATA" "$LOG"
 
-laeuft() {
-    [ -f "$PIDF" ] || return 1
-    PID=$(cat "$PIDF" 2>/dev/null)
+# $1 = PID-Datei, $2 = Skriptname
+laeuft_p() {
+    [ -f "$1" ] || return 1
+    PID=$(cat "$1" 2>/dev/null)
     [ -n "$PID" ] || return 1
     # Argumentweise pruefen, nicht mit grep ueber die ganze Befehlszeile:
     # ein grep auf "funkwacht" faende auch die eigene Suche.
-    tr '\0' '\n' < "/proc/$PID/cmdline" 2>/dev/null | grep -q 'funkwacht_dienst\.py$' && return 0
+    tr '\0' '\n' < "/proc/$PID/cmdline" 2>/dev/null | grep -q "/$2\$" && return 0
     return 1
+}
+
+# $1 = PID-Datei, $2 = Skriptname, $3 = Ausgabedatei
+start_p() {
+    if laeuft_p "$1" "$2"; then return 0; fi
+    nohup "$PY" "$SELF/$2" >> "$LOG/$3" 2>&1 &
+    echo $! > "$1"
+    sleep 1
+    # Die Wirkung pruefen, nicht den Rueckgabewert: nohup meldet Erfolg,
+    # auch wenn Python eine Sekunde spaeter aussteigt.
+    if laeuft_p "$1" "$2"; then return 0; fi
+    rm -f "$1"
+    return 1
+}
+
+stop_p() {
+    if ! laeuft_p "$1" "$2"; then rm -f "$1"; return 0; fi
+    PID=$(cat "$1")
+    kill "$PID" 2>/dev/null
+    for i in 1 2 3 4 5 6 7 8 9 10; do laeuft_p "$1" "$2" || break; sleep 1; done
+    if laeuft_p "$1" "$2"; then kill -9 "$PID" 2>/dev/null; sleep 1; fi
+    rm -f "$1"
+    return 0
+}
+
+WPID="$DATA/dienst.pid"
+MPID="$DATA/mithoerer.pid"
+
+# Braucht dieses Haus ueberhaupt einen Mithoerer? Ohne Stick auf der Art MQTT
+# waere ein zweiter Prozess Ballast.
+mithoerer_noetig() {
+    [ -f "$BASE/config/plugins/$PLUGIN/funkwacht.json" ] || return 1
+    grep -q '"art2\{0,1\}"[[:space:]]*:[[:space:]]*"mqtt"' \
+        "$BASE/config/plugins/$PLUGIN/funkwacht.json" 2>/dev/null
 }
 
 case "$1" in
     start)
-        if laeuft; then echo "Funkwacht laeuft bereits (PID $(cat "$PIDF"))."; exit 0; fi
-        nohup "$PY" "$SELF/funkwacht_dienst.py" >> "$LOG/dienst.out" 2>&1 &
-        echo $! > "$PIDF"
-        sleep 1
-        if laeuft; then echo "Funkwacht gestartet (PID $(cat "$PIDF"))."; exit 0; fi
-        # Die Wirkung pruefen, nicht den Rueckgabewert: nohup meldet Erfolg,
-        # auch wenn Python eine Sekunde spaeter aussteigt.
-        echo "Funkwacht konnte nicht gestartet werden. Siehe $LOG/dienst.out"
-        tail -n 20 "$LOG/dienst.out" 2>/dev/null
-        rm -f "$PIDF"
-        exit 1
+        RC=0
+        if laeuft_p "$WPID" funkwacht_dienst.py; then
+            echo "Funkwacht laeuft bereits (PID $(cat "$WPID"))."
+        elif start_p "$WPID" funkwacht_dienst.py dienst.out; then
+            echo "Funkwacht gestartet (PID $(cat "$WPID"))."
+        else
+            echo "Funkwacht konnte nicht gestartet werden. Siehe $LOG/dienst.out"
+            tail -n 20 "$LOG/dienst.out" 2>/dev/null
+            RC=1
+        fi
+        if mithoerer_noetig; then
+            if laeuft_p "$MPID" fw_mqtt.py; then
+                echo "Mithoerer laeuft bereits (PID $(cat "$MPID"))."
+            elif start_p "$MPID" fw_mqtt.py mithoerer.out; then
+                echo "Mithoerer gestartet (PID $(cat "$MPID"))."
+            else
+                echo "Mithoerer konnte nicht gestartet werden. Siehe $LOG/mithoerer.out"
+                RC=1
+            fi
+        else
+            stop_p "$MPID" fw_mqtt.py
+            echo "Kein Stick auf der Art MQTT - der Mithoerer wird nicht gebraucht."
+        fi
+        exit $RC
         ;;
     stop)
-        if ! laeuft; then echo "Funkwacht laeuft nicht."; rm -f "$PIDF"; exit 0; fi
-        PID=$(cat "$PIDF")
-        kill "$PID" 2>/dev/null
-        for i in 1 2 3 4 5 6 7 8 9 10; do laeuft || break; sleep 1; done
-        if laeuft; then kill -9 "$PID" 2>/dev/null; sleep 1; fi
-        rm -f "$PIDF"
+        stop_p "$MPID" fw_mqtt.py
+        stop_p "$WPID" funkwacht_dienst.py
         echo "Funkwacht angehalten."
         ;;
     restart)
@@ -55,8 +118,22 @@ case "$1" in
         "$0" start
         ;;
     status)
-        if laeuft; then echo "laeuft (PID $(cat "$PIDF"))"; exit 0; fi
-        echo "steht"; exit 3
+        RC=3
+        if laeuft_p "$WPID" funkwacht_dienst.py; then
+            echo "Waechter laeuft (PID $(cat "$WPID"))"
+            RC=0
+        else
+            echo "Waechter steht"
+        fi
+        if laeuft_p "$MPID" fw_mqtt.py; then
+            echo "Mithoerer laeuft (PID $(cat "$MPID"))"
+        elif mithoerer_noetig; then
+            echo "Mithoerer steht - er wird aber gebraucht"
+            RC=3
+        else
+            echo "Mithoerer steht (wird nicht gebraucht)"
+        fi
+        exit $RC
         ;;
     *)
         echo "Aufruf: $0 {start|stop|restart|status}"; exit 1

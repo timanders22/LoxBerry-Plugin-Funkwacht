@@ -4,6 +4,19 @@
 # Das ist keine Doppelung des Dienstes selbst - es faengt den Fall ab, dass
 # der Dienst durch einen Neustart des Systems oder einen Absturz weg ist.
 
-SELF=$(cd "$(dirname "$(readlink -f "$0")")" && pwd)
-BASE=$(cd "$SELF/../.." && pwd)
-exec "$BASE/bin/plugins/funkwacht/dienst.sh" start >/dev/null 2>&1
+# Der Ordnername steht nicht fest: beansprucht ein zweites Plugin denselben
+# FOLDER - LoxBerry haelt zwei Plugins mit verschiedenen Autoren fuer
+# verschieden -, installiert der Kern das zweite nach "funkwacht01". Der
+# Installer ersetzt den Platzhalter unten in jeder Textdatei des Archivs
+# (plugininstall.pl, sub replaceenv). Bleibt er stehen - etwa beim Lauf aus
+# einem entpackten Archiv -, greift der Rueckfall.
+DIENST="REPLACELBPBINDIR/dienst.sh"
+case "$DIENST" in
+    REPLACE*)
+        SELF=$(cd "$(dirname "$(readlink -f "$0")")" && pwd)
+        BASE=$(cd "$SELF/../.." && pwd)
+        DIENST="$BASE/bin/plugins/funkwacht/dienst.sh"
+        ;;
+esac
+[ -x "$DIENST" ] || exit 0
+exec "$DIENST" start >/dev/null 2>&1

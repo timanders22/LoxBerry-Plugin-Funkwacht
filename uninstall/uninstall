@@ -13,13 +13,19 @@ BASE=${LBHOMEDIR:-$(cd "$SELF/../../.." 2>/dev/null && pwd)}
 DIENST="$BASE/bin/plugins/$PFOLDER/dienst.sh"
 [ -x "$DIENST" ] && "$DIENST" stop >/dev/null 2>&1
 
-PID="$BASE/data/plugins/$PFOLDER/dienst.pid"
-if [ -f "$PID" ]; then
-    kill -9 "$(cat "$PID")" 2>/dev/null || true
-    rm -f "$PID"
-fi
+# Zwei Prozesse seit 1.0.0: der Waechter und der MQTT-Mithoerer.
+for N in dienst mithoerer; do
+    PID="$BASE/data/plugins/$PFOLDER/$N.pid"
+    if [ -f "$PID" ]; then
+        kill -9 "$(cat "$PID")" 2>/dev/null || true
+        rm -f "$PID"
+    fi
+done
 
+# Beides liegt NEBEN dem jeweiligen Ordner und ueberlebt deshalb jedes
+# Update - also auch das Deinstallieren, wenn es hier nicht steht.
 rm -f "$BASE/config/plugins/$PFOLDER.backup.json"
+rm -rf "$BASE/data/plugins/$PFOLDER.bestand"
 rm -rf "$BASE/data/plugins/$PFOLDER"
 
 if sudo -n rm -f /etc/sudoers.d/funkwacht 2>/dev/null; then
