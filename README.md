@@ -4,7 +4,7 @@
 Merkt, wenn ein Stick verstummt, weckt ihn in Stufen wieder auf — und misst
 nach, ob es geholfen hat.
 
-Version 1.0.0 · LoxBerry ab 3.0 · PHP 7.4 und 8.x · Python 3 · keine fremden
+Version 1.0.1 · LoxBerry ab 3.0 · PHP 7.4 und 8.x · Python 3 · keine fremden
 Bibliotheken
 
 ---

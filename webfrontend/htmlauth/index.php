@@ -994,7 +994,8 @@ if ($fw_rahmen) {
 <div class="sm-warnung"><?= sprintf(fw_t('MQTT.ABO_V1'), fw_e($fw_cfg['mqtt_topic'])) ?></div>
 <?php } else { ?>
 <div class="sm-warnung"><?= sprintf(fw_t('MQTT.ABO_V1'), fw_e($fw_cfg['mqtt_topic'])) ?></div>
-<div class="sm-hilfe"><?= sprintf(fw_t('MQTT.ABO_V2'), fw_e($fw_cfg['mqtt_topic'])) ?></div>
+<div class="sm-hinweis"><?= sprintf(fw_t('MQTT.ABO_V2'), fw_e($fw_cfg['mqtt_topic'])) ?></div>
+<div class="sm-hilfe"><?= fw_t('MQTT.ABO_UNBEKANNT') ?></div>
 <?php } ?>
 
 <form action="index.php" method="post">
@@ -1065,7 +1066,8 @@ if ($fw_rahmen) {
     if ((int) $fw_mqtt['fassung'] >= 2) { echo sprintf(fw_t('LOX.S2_V2'), fw_e($fw_cfg['mqtt_topic']));
     } elseif ((int) $fw_mqtt['fassung'] === 1) { echo sprintf(fw_t('LOX.S2_V1'), fw_e($fw_cfg['mqtt_topic']));
     } else { echo sprintf(fw_t('LOX.S2_V1'), fw_e($fw_cfg['mqtt_topic']))
-                  . '<br>' . sprintf(fw_t('LOX.S2_V2'), fw_e($fw_cfg['mqtt_topic'])); } ?></div>
+                  . '<br>' . sprintf(fw_t('LOX.S2_V2'), fw_e($fw_cfg['mqtt_topic']))
+                  . '<br>' . fw_t('MQTT.ABO_UNBEKANNT'); } ?></div>
 <div class="sm-step"><?= fw_t('LOX.S3') ?></div>
 
 <h3><?= fw_e(fw_t('LOX.H_ADRESSE')) ?></h3>

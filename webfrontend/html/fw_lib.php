@@ -560,6 +560,13 @@ function fw_log($text)
     /* log/plugins liegt auf einer Ramdisk - eine unbegrenzt wachsende Datei
      * frisst Arbeitsspeicher, nicht Plattenplatz. */
     $grenze = fw_log_kb() * 1024;
+    /* PHP merkt sich die Antworten von stat(). Ohne diese Zeile sieht
+     * filesize() innerhalb EINES Prozesses die Groesse des ersten Aufrufs und
+     * danach nie wieder eine neue - file_put_contents(..., FILE_APPEND) macht
+     * den Eintrag nicht ungueltig. fw_log() wird an fuenfzehn Stellen
+     * gerufen; die Kappung fiele nach dem ersten Mal aus, und auf einer
+     * Ramdisk kostet das Arbeitsspeicher. */
+    clearstatcache(true, $p['log']);
     if (is_file($p['log']) && filesize($p['log']) > $grenze) {
         $rest = array_slice(file($p['log'], FILE_IGNORE_NEW_LINES) ?: array(), -400);
         @file_put_contents($p['log'], implode("\n", $rest) . "\n");
