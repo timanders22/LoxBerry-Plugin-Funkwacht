@@ -12,15 +12,28 @@ Bis 0.9.3 las der Waechter mqtt_stand.json - und niemand schrieb sie. Ein als
 wurde sechsmal am Tag grundlos neu gestartet. Die Art war deshalb in 0.9.4
 aus der Auswahl genommen; mit diesem Mithoerer ist sie wieder da.
 
-WARUM OHNE FREMDE BIBLIOTHEK
-----------------------------
-paho-mqtt gibt es auf einem LoxBerry nicht zwingend, und was nicht in
-dpkg/apt steht, ist nicht zugesichert. PEP 668 verbietet ausserdem ein
-systemweites pip3 install. Das hier gebrauchte Stueck von MQTT 3.1.1 ist
-klein: verbinden, abonnieren, zuhoeren, am Leben bleiben. Es wird NICHTS
-veroeffentlicht - dieser Prozess ist ein Zuhoerer, kein Sender. Wer ihn
-erweitern will, sollte das im Kopf behalten: ein Waechter, der auf dem Broker
-schreibt, kann den Broker stoeren, den er ueberwacht.
+WARUM PAHO - UND WARUM ES BIS 1.0.1 ANDERS WAR
+----------------------------------------------
+Bis 1.0.1 baute diese Datei ihre MQTT-Haelfte selbst, mit der Begruendung,
+paho sei auf einem LoxBerry nicht zugesichert und PEP 668 verbiete ein
+systemweites pip3 install.
+
+Gemessen am 07.09.2026, und beides trifft nicht zu: am Geraet meldet
+`dpkg -l python3-paho-mqtt` die Fassung 2.1.0-1 als regulaeres
+Debian-Paket, systemweit importierbar; fuenf Linien dieses Hauses binden es
+ueber dpkg/apt genau so ein (APC-UPS, BLE-Scanner, Chromecast4lox,
+Heimkino, Ultraschall), sechs weitere ueber eine venv. Ein Debian-Paket ist
+kein pip - PEP 668 hat damit nichts zu tun. `python3-paho-mqtt` steht
+seither auch in dpkg/apt dieses Plugins.
+
+Was bleibt: es wird NICHTS veroeffentlicht - dieser Prozess ist ein
+Zuhoerer, kein Sender. Wer ihn erweitert, sollte das im Kopf behalten: ein
+Waechter, der auf dem Broker schreibt, kann den Broker stoeren, den er
+ueberwacht.
+
+Das Abonnement wird bei JEDER Verbindung neu gesetzt. paho fuehrt keinen
+Abonnementspeicher; nach einem Broker-Neustart waere der Klient sonst
+verbunden und auf nichts abonniert - schweigend.
 
 WAS ER NICHT TUT
 ----------------
@@ -32,7 +45,7 @@ misst die Stille.
 Aufrufe:
     fw_mqtt.py                 laeuft als Dienst
     fw_mqtt.py --probe 10      zehn Sekunden zuhoeren und berichten
-    fw_mqtt.py --selbsttest    Paketbau und Themenvergleich nachrechnen
+    fw_mqtt.py --selbsttest    Themenvergleich und paho-Anbindung nachrechnen
 
 Kompatibel mit Python 3.9 und 3.11.
 """
@@ -42,22 +55,17 @@ from __future__ import annotations
 import json
 import os
 import signal
-import socket
-import struct
 import sys
 import time
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import fw_pruef  # noqa: E402
 
-FASSUNG = "1.0.0"
+FASSUNG = "1.0.2"
 laeuft = True
 
-# MQTT 3.1.1, nur die Pakete, die hier gebraucht werden.
-CONNECT, CONNACK = 0x10, 0x20
-PUBLISH, SUBSCRIBE, SUBACK = 0x30, 0x82, 0x90
-PINGREQ, PINGRESP, DISCONNECT = 0xC0, 0xD0, 0xE0
-
+# Die CONNACK-Codes von MQTT 3.1.1. paho reicht sie unveraendert durch,
+# und sie sind das Erste, was man bei einem stummen Mithoerer wissen will.
 CONNACK_TEXT = {
     0: "angenommen",
     1: "Protokollfassung abgelehnt",
@@ -69,79 +77,8 @@ CONNACK_TEXT = {
 
 
 # ======================================================================
-# Paketbau - rein rechnerisch, deshalb pruefbar
+# Themenvergleich - rein rechnerisch, deshalb pruefbar
 # ======================================================================
-
-def laenge_kodieren(n: int) -> bytes:
-    """Die variable Laengenangabe von MQTT (7 Bit je Byte, Fortsetzungsbit)."""
-    if n < 0 or n > 268435455:
-        raise ValueError("Laenge ausserhalb des Bereichs: %d" % n)
-    aus = bytearray()
-    while True:
-        b = n % 128
-        n //= 128
-        if n > 0:
-            b |= 0x80
-        aus.append(b)
-        if n == 0:
-            break
-    return bytes(aus)
-
-
-def laenge_lesen(hole_byte) -> int:
-    """Die variable Laengenangabe zurueckrechnen. hole_byte() liefert ein Byte."""
-    wert = 0
-    faktor = 1
-    for _ in range(4):
-        b = hole_byte()
-        wert += (b & 0x7F) * faktor
-        if not (b & 0x80):
-            return wert
-        faktor *= 128
-    raise ValueError("Laengenangabe laenger als vier Byte")
-
-
-def text(s: str) -> bytes:
-    """Eine Zeichenkette in MQTT-Form: zwei Byte Laenge, dann UTF-8."""
-    b = str(s).encode("utf-8")
-    if len(b) > 65535:
-        raise ValueError("Zeichenkette zu lang")
-    return struct.pack("!H", len(b)) + b
-
-
-def connect_paket(kennung: str, benutzer: str = "", kennwort: str = "",
-                  keepalive: int = 60) -> bytes:
-    """Das CONNECT-Paket bauen.
-
-    Clean Session ist gesetzt: dieser Zuhoerer will keine nachgelieferten
-    Nachrichten aus einer alten Sitzung. Ein Waechter, der nach einem Neustart
-    eine Stunde alte Nachricht als frisches Lebenszeichen zaehlt, misst die
-    Vergangenheit.
-    """
-    flags = 0x02                       # Clean Session
-    rumpf = text("MQTT") + bytes([4])  # Protokollname und -fassung 3.1.1
-    if benutzer:
-        flags |= 0x80
-        if kennwort:
-            flags |= 0x40
-    rumpf += bytes([flags]) + struct.pack("!H", int(keepalive))
-    rumpf += text(kennung)
-    if benutzer:
-        rumpf += text(benutzer)
-        if kennwort:
-            rumpf += text(kennwort)
-    return bytes([CONNECT]) + laenge_kodieren(len(rumpf)) + rumpf
-
-
-def subscribe_paket(themen, paket_nr: int = 1) -> bytes:
-    """Das SUBSCRIBE-Paket bauen. QoS 0 - mehr braucht ein Lebenszeichen nicht."""
-    if not themen:
-        raise ValueError("Ein SUBSCRIBE ohne Thema ist nicht zulaessig")
-    rumpf = struct.pack("!H", paket_nr)
-    for t in themen:
-        rumpf += text(t) + bytes([0])
-    return bytes([SUBSCRIBE]) + laenge_kodieren(len(rumpf)) + rumpf
-
 
 def thema_passt(muster: str, thema: str) -> bool:
     """Trifft ein abonniertes Muster dieses Thema?
@@ -284,75 +221,95 @@ def themen() -> list:
 # ======================================================================
 
 class Mithoerer:
+    """Zuhoeren und aufschreiben, wann auf welchem Thema zuletzt etwas kam.
+
+    Die Schnittstelle ist dieselbe wie vor 1.0.2 (verbinden, durchlauf,
+    schliessen, .stand, .empfangen), damit main() unveraendert bleibt.
+    """
+
     def __init__(self, zug, muster, keepalive=60):
         self.zug = zug
         self.muster = list(muster)
         self.keepalive = keepalive
-        self.sock = None
-        self.puffer = b""
+        self.klient = None
         self.stand = {}
-        self.zuletzt_gesendet = 0.0
         self.empfangen = 0
+        self.verbunden = False
+        self.abbruch = None          # Grund, der kein Warten heilt
 
     # -- Netz ---------------------------------------------------------
     def verbinden(self):
-        self.sock = socket.create_connection((self.zug["host"], self.zug["port"]),
-                                             timeout=10)
-        self.sock.settimeout(1.0)
-        self.sock.sendall(connect_paket(self.zug["kennung"], self.zug["user"],
-                                        self.zug["pass"], self.keepalive))
-        art, rumpf = self.paket_lesen(zeit=10)
-        if art != CONNACK or len(rumpf) < 2:
-            raise OSError("Der Broker hat kein CONNACK geschickt.")
-        code = rumpf[1]
-        if code != 0:
-            raise OSError("Der Broker weist ab: %s (Code %d)"
-                          % (CONNACK_TEXT.get(code, "unbekannt"), code))
-        self.sock.sendall(subscribe_paket(self.muster))
-        art, _ = self.paket_lesen(zeit=10)
-        if art != SUBACK:
-            raise OSError("Der Broker hat das Abonnement nicht bestaetigt.")
-        self.zuletzt_gesendet = time.time()
+        import paho.mqtt.client as mq
 
-    def byte(self, zeit):
-        ende = time.time() + zeit
-        while True:
-            if self.puffer:
-                b = self.puffer[0]
-                self.puffer = self.puffer[1:]
-                return b
-            if time.time() > ende:
-                raise socket.timeout("keine Daten")
+        # Die Rueckrufform wird ABGETASTET, nicht angenommen: paho 2.x
+        # schreibt bei VERSION1 eine Verfallswarnung in jedes Protokoll,
+        # paho 1.x kennt die Aufzaehlung gar nicht. Hausmuster, wie im
+        # BLE-Scanner.
+        try:
+            self.klient = mq.Client(mq.CallbackAPIVersion.VERSION2,
+                                    client_id=self.zug["kennung"])
+        except (AttributeError, TypeError):
             try:
-                d = self.sock.recv(4096)
-            except socket.timeout:
-                continue
-            if not d:
-                raise OSError("Der Broker hat die Verbindung geschlossen.")
-            self.puffer += d
+                self.klient = mq.Client(mq.CallbackAPIVersion.VERSION1,
+                                        client_id=self.zug["kennung"])
+            except (AttributeError, TypeError):
+                self.klient = mq.Client(client_id=self.zug["kennung"])
 
-    def paket_lesen(self, zeit=1.0):
-        kopf = self.byte(zeit)
-        laenge = laenge_lesen(lambda: self.byte(zeit))
-        rumpf = b""
-        while len(rumpf) < laenge:
-            rumpf += bytes([self.byte(zeit)])
-        return kopf & 0xF0, rumpf
+        # ANMELDEN, nicht nur verbinden. Der Broker dieser Anlage weist
+        # anonyme Verbindungen mit CONNACK 5 ab (am Geraet gemessen).
+        if self.zug.get("user"):
+            self.klient.username_pw_set(self.zug["user"], self.zug.get("pass") or "")
 
-    # -- Auswerten ----------------------------------------------------
-    def publish_auswerten(self, kopf_flags, rumpf):
-        if len(rumpf) < 2:
-            return
-        tl = struct.unpack("!H", rumpf[0:2])[0]
-        thema = rumpf[2:2 + tl].decode("utf-8", "replace")
-        jetzt = time.time()
-        self.empfangen += 1
-        for m in self.muster:
-            if thema_passt(m, thema):
-                self.stand[m] = jetzt
-        # Das konkrete Thema zusaetzlich ablegen: bei einem Platzhalter sieht
-        # man in der Oberflaeche sonst nie, WAS wirklich ankam.
-        self.stand["#letztes"] = thema
+        def bei_verbindung(_c, _u, _f, rc, *_a):
+            code = int(getattr(rc, "value", rc) or 0)
+            if code != 0:
+                # 4 und 5 sind falsche oder fehlende Zugangsdaten - die
+                # behebt kein Warten, deshalb wird der Grund benannt und
+                # der Dauerlauf abgebrochen statt im Kreis zu klopfen.
+                self.verbunden = False
+                self.abbruch = ("Der Broker weist ab: %s (Code %d)"
+                                % (CONNACK_TEXT.get(code, "unbekannt"), code))
+                return
+            self.verbunden = True
+            self.abbruch = None
+            # BEI JEDER Verbindung abonnieren, nicht nur bei der ersten:
+            # paho fuehrt keinen Abonnementspeicher. Nach einem
+            # Broker-Neustart waere der Klient sonst verbunden und auf
+            # nichts abonniert - und diese Datei misst dann die Stille
+            # ihres eigenen Fehlers.
+            for m in self.muster:
+                self.klient.subscribe(m)
+
+        def bei_nachricht(_c, _u, m):
+            jetzt = time.time()
+            self.empfangen += 1
+            thema = m.topic
+            for muster in self.muster:
+                if thema_passt(muster, thema):
+                    self.stand[muster] = jetzt
+            # Das konkrete Thema zusaetzlich ablegen: bei einem Platzhalter
+            # sieht man in der Oberflaeche sonst nie, WAS wirklich ankam.
+            self.stand["#letztes"] = thema
+
+        def bei_trennung(*_a, **_k):
+            self.verbunden = False
+
+        self.klient.on_connect = bei_verbindung
+        self.klient.on_message = bei_nachricht
+        self.klient.on_disconnect = bei_trennung
+        self.klient.connect(self.zug["host"], self.zug["port"], self.keepalive)
+        self.klient.loop_start()
+
+        # Auf das CONNACK warten. Ohne das gaelte ein abgewiesener Klient
+        # als verbunden, und der Dienst schwiege ueber den einzigen Grund,
+        # den er kennt.
+        ende = time.time() + 10
+        while time.time() < ende and not self.verbunden and self.abbruch is None:
+            time.sleep(0.05)
+        if self.abbruch:
+            raise OSError(self.abbruch)
+        if not self.verbunden:
+            raise OSError("Der Broker hat kein CONNACK geschickt.")
 
     def stand_schreiben(self):
         p = pfade()
@@ -369,22 +326,20 @@ class Mithoerer:
 
     # -- Hauptschleife ------------------------------------------------
     def durchlauf(self, bis=None):
+        """paho horcht in seinem eigenen Faden; hier wird nur geschrieben.
+
+        Ein Verbindungsabriss ist KEIN Abbruch mehr: loop_start() baut die
+        Verbindung selbst wieder auf, und on_connect abonniert dabei neu.
+        Abgebrochen wird nur, was kein Warten heilt - eine Abweisung.
+        """
         letzte_datei = 0.0
         while laeuft and (bis is None or time.time() < bis):
-            try:
-                art, rumpf = self.paket_lesen(zeit=1.0)
-            except socket.timeout:
-                art = None
-            if art == PUBLISH:
-                self.publish_auswerten(0, rumpf)
-            elif art == DISCONNECT:
-                raise OSError("Der Broker hat abgemeldet.")
+            if self.abbruch:
+                raise OSError(self.abbruch)
+            time.sleep(0.2)
             jetzt = time.time()
-            if jetzt - self.zuletzt_gesendet > self.keepalive / 2:
-                self.sock.sendall(bytes([PINGREQ, 0]))
-                self.zuletzt_gesendet = jetzt
-            # Hoechstens alle fuenf Sekunden schreiben: die Datei liegt unter
-            # data/ und damit auf der Platte, nicht auf der Ramdisk.
+            # Hoechstens alle fuenf Sekunden schreiben: die Datei liegt
+            # unter data/ und damit auf der Platte, nicht auf der Ramdisk.
             if self.stand and jetzt - letzte_datei > 5:
                 self.stand_schreiben()
                 letzte_datei = jetzt
@@ -392,12 +347,13 @@ class Mithoerer:
 
     def schliessen(self):
         try:
-            if self.sock:
-                self.sock.sendall(bytes([DISCONNECT, 0]))
-                self.sock.close()
+            if self.klient:
+                self.klient.loop_stop()
+                self.klient.disconnect()
         except Exception:
             pass
-        self.sock = None
+        self.klient = None
+        self.verbunden = False
 
 
 def beenden(signum, rahmen):
@@ -423,51 +379,40 @@ def selbsttest() -> tuple:
             zeilen.append("       erzeugt : %r" % (ist,))
             zeilen.append("       erwartet: %r" % (soll,))
 
-    # ---------- Laengenangabe ----------
-    pr("Laenge 0", laenge_kodieren(0), b"\x00")
-    pr("Laenge 127 passt in ein Byte", laenge_kodieren(127), b"\x7f")
-    pr("Laenge 128 braucht zwei", laenge_kodieren(128), b"\x80\x01")
-    pr("Laenge 16383", laenge_kodieren(16383), b"\xff\x7f")
-    pr("Laenge 16384", laenge_kodieren(16384), b"\x80\x80\x01")
-    for n in (0, 1, 127, 128, 300, 16383, 16384, 2097151, 2097152):
-        roh = laenge_kodieren(n)
-        i = {"k": 0}
-
-        def hole():
-            b = roh[i["k"]]
-            i["k"] += 1
-            return b
-        pr("Laenge %d hin und zurueck" % n, laenge_lesen(hole), n)
-
-    # ---------- Zeichenketten ----------
-    pr("Zeichenkette traegt ihre Laenge", text("MQTT"), b"\x00\x04MQTT")
-    pr("Umlaute zaehlen in Byte, nicht in Zeichen", text("ae")[1], 2)
-    pr("ein Umlaut ist zwei Byte", len(text("ä")) - 2, 2)
-
-    # ---------- CONNECT ----------
-    p = connect_paket("wacht", "", "", 60)
-    pr("CONNECT beginnt mit 0x10", p[0], CONNECT)
-    pr("CONNECT nennt das Protokoll", p[2:8], b"\x00\x04MQTT")
-    pr("Protokollfassung 4 (das ist 3.1.1)", p[8], 4)
-    pr("ohne Benutzer nur Clean Session", p[9], 0x02)
-    pr("Keepalive steht drin", struct.unpack("!H", p[10:12])[0], 60)
-    pu = connect_paket("wacht", "hans", "geheim")
-    pr("mit Benutzer und Kennwort sind beide Flags gesetzt", pu[9], 0x02 | 0x80 | 0x40)
-    pn = connect_paket("wacht", "hans", "")
-    pr("mit Benutzer ohne Kennwort nur eines", pn[9], 0x02 | 0x80)
-    pr("die Laengenangabe stimmt mit dem Rumpf ueberein", len(p) - 2, p[1])
-
-    # ---------- SUBSCRIBE ----------
-    s = subscribe_paket(["a/b", "c/#"], 7)
-    pr("SUBSCRIBE traegt 0x82 (QoS 1 ist Pflicht)", s[0], SUBSCRIBE)
-    pr("die Paketnummer steht vorn", struct.unpack("!H", s[2:4])[0], 7)
-    pr("jedes Thema endet mit dem QoS-Byte", s[-1], 0)
-    fehler = ""
+    # ---------- paho ----------
+    # Die Bibliothek ist die Grundlage dieses Dienstes seit 1.0.2. Wenn sie
+    # fehlt, sagt das der Selbsttest - nicht erst der stumme Dienst.
     try:
-        subscribe_paket([])
-    except ValueError as e:
-        fehler = "abgewiesen"
-    pr("ein SUBSCRIBE ohne Thema wird abgewiesen", fehler, "abgewiesen")
+        import paho.mqtt.client as _mq
+        da = True
+    except Exception:                                        # noqa: BLE001
+        _mq = None
+        da = False
+    pr("paho-mqtt ist da", da, True)
+    if da:
+        k = None
+        for versuch in ("v2", "v1", "alt"):
+            try:
+                if versuch == "v2":
+                    k = _mq.Client(_mq.CallbackAPIVersion.VERSION2, client_id="probe")
+                elif versuch == "v1":
+                    k = _mq.Client(_mq.CallbackAPIVersion.VERSION1, client_id="probe")
+                else:
+                    k = _mq.Client(client_id="probe")
+                break
+            except (AttributeError, TypeError):
+                continue
+        pr("ein Klient laesst sich bauen", k is not None, True)
+        # Die Anmeldung wird GESETZT, nicht nur gelesen: das war der Fehler
+        # in Skoda-Connect-NG, und dieser Dienst darf ihn nicht erben.
+        gesetzt = {"ja": False}
+        if k is not None:
+            try:
+                k.username_pw_set("hans", "geheim")
+                gesetzt["ja"] = True
+            except Exception:                                # noqa: BLE001
+                pass
+        pr("username_pw_set laesst sich rufen", gesetzt["ja"], True)
 
     # ---------- Themenvergleich ----------
     pr("genaues Thema trifft", thema_passt("a/b/c", "a/b/c"), True)
@@ -491,6 +436,15 @@ def selbsttest() -> tuple:
     pr("Code 5 ist der, den man am haeufigsten sieht",
        CONNACK_TEXT[5], "nicht autorisiert")
     pr("jeder Code hat einen Text", sorted(CONNACK_TEXT), [0, 1, 2, 3, 4, 5])
+
+    # ---------- Zugang ----------
+    # Ein Zugang ohne Benutzer ist zulaessig (ein Broker ohne Anmeldung),
+    # aber er darf nicht daran scheitern, dass die Schluessel fehlen.
+    z = zugang()
+    pr("der Zugang nennt einen Rechner", bool(z.get("host")), True)
+    pr("der Zugang nennt einen Port", isinstance(z.get("port"), int), True)
+    pr("der Zugang fuehrt ein Benutzerfeld", "user" in z, True)
+    pr("der Zugang fuehrt ein Kennwortfeld", "pass" in z, True)
 
     kopf = "Funkwacht-Mithoerer %s: %d Faelle geprueft, %d Fehlschlaege." % (
         FASSUNG, stand["n"], stand["f"])

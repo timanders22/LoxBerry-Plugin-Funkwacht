@@ -12,4 +12,11 @@
 # Wichtig: uhubctl schaltet nur an Verteilern, die Portstrom koennen. Der
 # eingebaute Verteiler des Raspberry Pi 4 kann es NICHT - das Paket allein
 # beweist also nichts, deshalb misst der Reiter Test nach.
+#
+# python3-paho-mqtt: der MQTT-Mithoerer (bin/fw_mqtt.py) benutzt seit 1.0.2
+# paho statt einer selbstgebauten Protokollhaelfte. Es ist ein regulaeres
+# Debian-Paket (am Geraet gemessen 07.09.2026: 2.1.0-1); PEP 668 betrifft
+# es nicht, das gilt nur fuer pip. Fuenf weitere Linien dieses Hauses
+# binden es genauso ein.
 uhubctl
+python3-paho-mqtt

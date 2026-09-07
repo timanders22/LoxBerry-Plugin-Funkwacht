@@ -4,10 +4,20 @@
 Merkt, wenn ein Stick verstummt, weckt ihn in Stufen wieder auf — und misst
 nach, ob es geholfen hat.
 
-Version 1.0.1 · LoxBerry ab 3.0 · PHP 7.4 und 8.x · Python 3 · keine fremden
+Version 1.0.2 · LoxBerry ab 3.0 · PHP 7.4 und 8.x · Python 3 · keine fremden
 Bibliotheken
 
 ---
+
+## Neu in 1.0.2
+
+- **Das Auswahlfeld zeichnet seinen Pfeil selbst.** Bis 1.0.1 kam er von der
+  Oberfläche des LoxBerry. Am 05.09.2026 am Gerät gemessen (LoxBerry 4.0.0.15,
+  `system/css/components.css`): deren Regel `.lb-content select`
+  gibt es erst seit der neuen Oberfläche, und jede eigene Feldregel mit der
+  Kurzform `background:` löscht sie wieder. Darauf soll sich eine
+  Plugin-Oberfläche nicht verlassen (`Regeln/04`). Sonst ist an dieser
+  Fassung nichts geändert.
 
 ## Wofür
 
