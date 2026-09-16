@@ -8,9 +8,20 @@
 # sudoers/sudoers ins Archiv, und plugininstall.pl loescht
 # system/sudoers/<NAME> beim Deinstallieren (purge_installation, Schritt 6).
 # Der fruehere Block "sudo -n rm -f /etc/sudoers.d/funkwacht" ist entfallen.
+#
+# Aufruf durch den Installer: data/system/uninstall/<name>
+#   <TEMPFILE> <NAME> <FOLDER> <VERSION> <BASEFOLDER> <TEMPFOLDER>
+# Ordner und Wurzel kommen deshalb aus $3 und $5. Bis hierher wurde der Ordner
+# aus dem eigenen Ablageort abgeleitet - installiert ist das data/system, der
+# Ordnername wurde "system" (am Geraet so errechnet, 17.09.2026; Regeln/06).
 SELF=$(cd "$(dirname "$0")" && pwd)
-PFOLDER=$(basename "$(cd "$SELF/.." && pwd)")
-BASE=${LBHOMEDIR:-$(cd "$SELF/../../.." 2>/dev/null && pwd)}
+ARGV3=$3
+ARGV5=$5
+PFOLDER="${ARGV3:-funkwacht}"
+BASE="${ARGV5:-$LBHOMEDIR}"
+if [ -z "$BASE" ] || [ ! -d "$BASE" ]; then
+    BASE=$(cd "$SELF/../../.." 2>/dev/null && pwd)
+fi
 
 DIENST="$BASE/bin/plugins/$PFOLDER/dienst.sh"
 [ -x "$DIENST" ] && "$DIENST" stop >/dev/null 2>&1

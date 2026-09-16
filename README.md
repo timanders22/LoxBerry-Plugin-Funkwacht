@@ -4,10 +4,21 @@
 Merkt, wenn ein Stick verstummt, weckt ihn in Stufen wieder auf — und misst
 nach, ob es geholfen hat.
 
-Version 1.0.3 · LoxBerry ab 3.0 · PHP 7.4 und 8.x · Python 3 mit paho-mqtt
+Version 1.0.4 · LoxBerry ab 3.0 · PHP 7.4 und 8.x · Python 3 mit paho-mqtt
 (Debian-Paket, über `dpkg/apt`)
 
 ---
+
+## Neu in 1.0.4
+
+**Die Deinstallation räumte nicht auf.** Der LoxBerry-Installer legt das
+Deinstallationsskript unter `data/system/uninstall/funkwacht` ab und übergibt
+ihm Ordnernamen und LoxBerry-Wurzel als Argumente. Das Skript leitete den
+Ordnernamen aus seinem eigenen Ablageort ab und kam dort auf `system` statt
+`funkwacht`. Folge: Wächter und Mithörer liefen nach dem Deinstallieren
+weiter, und `funkwacht.backup.json` sowie `data/plugins/funkwacht.bestand`
+blieben liegen. Ordnername und Wurzel kommen jetzt aus den Argumenten.
+Gefunden am Govee-Plugin, dort am Gerät nachgerechnet.
 
 ## Neu in 1.0.3
 
