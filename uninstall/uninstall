@@ -1,11 +1,13 @@
 #!/bin/bash
 # Funkwacht - Deinstallation
 #
-# Die Deinstallation von LoxBerry entfernt nur das VERZEICHNIS
-# config/plugins/<ordner>/. Eine Sicherungsdatei DANEBEN bliebe liegen,
-# ebenso die Rechtedatei unter /etc/sudoers.d/ - und die waere die
-# unangenehmste Hinterlassenschaft: Rechte, die niemand mehr braucht und an
-# die niemand mehr denkt.
+# Die Deinstallation von LoxBerry entfernt nur die Ordner des Plugins selbst.
+# Eine Sicherungsdatei DANEBEN bliebe liegen.
+#
+# Die Rechtedatei raeumt der Installer selbst ab: sie kommt seit 1.0.3 als
+# sudoers/sudoers ins Archiv, und plugininstall.pl loescht
+# system/sudoers/<NAME> beim Deinstallieren (purge_installation, Schritt 6).
+# Der fruehere Block "sudo -n rm -f /etc/sudoers.d/funkwacht" ist entfallen.
 SELF=$(cd "$(dirname "$0")" && pwd)
 PFOLDER=$(basename "$(cd "$SELF/.." && pwd)")
 BASE=${LBHOMEDIR:-$(cd "$SELF/../../.." 2>/dev/null && pwd)}
@@ -27,13 +29,6 @@ done
 rm -f "$BASE/config/plugins/$PFOLDER.backup.json"
 rm -rf "$BASE/data/plugins/$PFOLDER.bestand"
 rm -rf "$BASE/data/plugins/$PFOLDER"
-
-if sudo -n rm -f /etc/sudoers.d/funkwacht 2>/dev/null; then
-    echo "<OK> Rechtedatei /etc/sudoers.d/funkwacht entfernt."
-else
-    echo "<INFO> /etc/sudoers.d/funkwacht konnte nicht entfernt werden."
-    echo "<INFO> Bitte als root nachholen: rm -f /etc/sudoers.d/funkwacht"
-fi
 
 echo "<OK> Funkwacht entfernt, Sicherungsdatei geloescht."
 exit 0

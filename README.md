@@ -4,10 +4,36 @@
 Merkt, wenn ein Stick verstummt, weckt ihn in Stufen wieder auf — und misst
 nach, ob es geholfen hat.
 
-Version 1.0.2 · LoxBerry ab 3.0 · PHP 7.4 und 8.x · Python 3 · keine fremden
-Bibliotheken
+Version 1.0.3 · LoxBerry ab 3.0 · PHP 7.4 und 8.x · Python 3 mit paho-mqtt
+(Debian-Paket, über `dpkg/apt`)
 
 ---
+
+## Neu in 1.0.3
+
+Am LoxBerry durchgemessen (17.09.2026, installiert war 1.0.2). Behoben ist,
+was dort gefunden wurde:
+
+- **Die Heilrechte kommen jetzt wirklich an.** Bis 1.0.2 sollte
+  `postinstall.sh` die Rechtedatei nach `/etc/sudoers.d/` legen — das Skript
+  läuft aber als `loxberry` und durfte es nie. Am Gerät fehlte die Datei, der
+  Reiter *Test* meldete `docker=nein uhubctl=nein tee=nein`, und geheilt wurde
+  nichts außer einem Dienstneustart. Die Datei liegt jetzt als
+  `sudoers/sudoers` im Archiv; LoxBerry legt sie bei der Installation selbst
+  als root ab und räumt sie beim Deinstallieren wieder weg.
+- **Eine abgewiesene Anmeldung am Broker nennt ihren Grund.** paho 2.x meldet
+  falsche Zugangsdaten als Code 134, nicht 4 (am Gerät gemessen); der Mithörer
+  schrieb „unbekannt (Code 134)". Beide Zählweisen stehen jetzt in der Tabelle.
+- **Zustände gehen retained an den Broker** (Hausstandard): nach einem
+  Neustart des Miniservers stehen sie sofort wieder da. Welche Themen
+  retained sind, zeigt der Reiter *MQTT* in einer eigenen Spalte; das
+  Lebenszeichen `ts` und alle Werte, die von selbst veralten, bleiben
+  flüchtig.
+- **Die Fassungsauskunft stimmt.** `faehigkeit.json` meldete am Gerät
+  `"fassung": "1.0.0"` bei installierter 1.0.2; die Nummer kommt jetzt aus
+  der Plugin-Datenbank des LoxBerry.
+- **Kein `__pycache__` mehr im installierten Ordner**, und `preupgrade.sh`
+  sagt, ob es einen laufenden Wächter angehalten hat.
 
 ## Neu in 1.0.2
 
@@ -207,9 +233,11 @@ seinen Broker führt.
 Zum Heilen braucht der Wächter `sudo` für fünf Dinge: `systemctl restart`,
 `docker restart`, `uhubctl` mit Argumenten, `uhubctl` ohne Argumente (das
 zählt nur die Verteiler auf) und ein `tee` auf die beiden sysfs-Dateien. Die
-Rechtedatei legt `postinstall.sh` unter `/etc/sudoers.d/funkwacht` ab und
-prüft sie mit `visudo -c`; ist sie fehlerhaft, wird sie sofort wieder
-entfernt.
+Rechtedatei liegt als `sudoers/sudoers` im Archiv. LoxBerry kopiert sie bei
+der Installation selbst, als root, nach `<LoxBerry>/system/sudoers/funkwacht`
+— `/etc/sudoers.d` ist auf dem LoxBerry ein Verweis dorthin — und löscht sie
+vor jedem Upgrade und beim Deinstallieren. `postinstall.sh` prüft danach mit
+`visudo -c` und `sudo -n -l`, ob sie angekommen ist und greift.
 
 Ohne diese Datei läuft das Plugin weiter und **meldet**, heilt aber nichts.
 Der Reiter *Test* sagt es **je Befehl einzeln** — ein pauschales
@@ -232,12 +260,14 @@ sein Schaden.
 
 ## Prüfstand
 
-* Reiter *Test*, Knopf **Selbstprüfung** — siebzehn Fragen mit Haken, Kreuz
+* Reiter *Test*, Knopf **Selbstprüfung** — achtzehn Fragen mit Haken, Kreuz
   oder „hier lässt sich nichts messen".
-* `python3 bin/funkwacht_dienst.py --selbsttest` — 104 Fälle des Rechenkerns,
-  ohne Netz und ohne Geräte.
-* `python3 bin/fw_mqtt.py --selbsttest` — 45 Fälle Paketbau und
-  Themenvergleich.
+* `python3 bin/funkwacht_dienst.py --selbsttest` — 115 Fälle: Rechenkern,
+  Retain je Thema, Fassungsquelle; ohne Netz und ohne Geräte.
+* `python3 bin/funkwacht_dienst.py --themen` — jedes gesendete Thema mit
+  seinem Retain-Wert.
+* `python3 bin/fw_mqtt.py --selbsttest` — 29 Fälle: Themenvergleich,
+  paho-Anbindung, Anmeldegründe in beiden Zählweisen.
 * `python3 bin/fw_suche.py --selbsttest` — 17 Fälle der Suchhilfe.
 * `python3 bin/funkwacht_dienst.py --trocken` — was würde jetzt geschehen?
 * `python3 bin/funkwacht_dienst.py --heile 2:1` — Stick 2, Stufe 1, von Hand.
@@ -248,12 +278,13 @@ sein Schaden.
 
 ```
 bin/            Rechenkern, Wächter, Mithörer, Suchhilfe, Meldebrücke,
-                Startskript, sudoers-Vorlage
+                Fassungsauskunft, Startskript
+sudoers/        die Rechtedatei — LoxBerry legt sie als root ab
 cron/           Minutentakt — startet die Dienste, falls sie stehen
-dpkg/apt        uhubctl (wird von LoxBerry als root installiert)
+dpkg/apt        uhubctl und python3-paho-mqtt (installiert LoxBerry als root)
 templates/      Sprachdateien und Hilfe
 webfrontend/    html = Endpunkt für den Miniserver, htmlauth = Oberfläche
-uninstall/      räumt auch /etc/sudoers.d/funkwacht weg
+uninstall/      räumt die Sicherungen neben den Ordnern weg
 ```
 
 Die Sprachdateien werden aus einer Quelle erzeugt:

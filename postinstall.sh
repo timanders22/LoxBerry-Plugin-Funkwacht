@@ -140,41 +140,35 @@ fi
 rm -f "$BEST/stand.json" 2>/dev/null
 
 # ---------- Die Rechtedatei ----------
-# Sie muss root gehoeren und 0440 haben, sonst weist sudo sie ab. Als
-# loxberry laesst sie sich nur ueber sudo ablegen - was voraussetzt, dass
-# loxberry sudo schon darf (auf LoxBerry ist das der Fall). Klappt es nicht,
-# wird das GESAGT und nicht verschwiegen: ohne diese Datei bleibt es beim
-# Melden, geheilt wird dann nichts.
-# Die Vorlage liegt in bin/, weil LoxBerry NUR bekannte Ordner uebernimmt -
-# eine Datei im Wurzelverzeichnis des Archivs landet nirgends. Genau deshalb
-# ist die Zweitschrift im Wurzelverzeichnis in 0.9.4 entfallen.
-SUD=""
-for K in "$PBIN/sudoers.funkwacht" ${TEMP:+"$TEMP/bin/sudoers.funkwacht"}; do
-    [ -f "$K" ] && SUD="$K" && break
-done
-if [ -n "$SUD" ]; then
-    if sudo -n test -d /etc/sudoers.d 2>/dev/null \
-       && sudo -n install -o root -g root -m 0440 "$SUD" /etc/sudoers.d/funkwacht 2>/dev/null; then
-        # Die Wirkung pruefen, nicht den Rueckgabewert: visudo sagt, ob die
-        # Datei fuer sudo ueberhaupt lesbar ist. Eine fehlerhafte Datei in
-        # /etc/sudoers.d legt SAEMTLICHE sudo-Aufrufe des Systems lahm -
-        # deshalb wird sie sofort wieder entfernt, wenn visudo meckert.
-        if sudo -n visudo -c -f /etc/sudoers.d/funkwacht >/dev/null 2>&1; then
-            echo "<OK> Rechtedatei /etc/sudoers.d/funkwacht angelegt."
+# BERICHTIGT in 1.0.3. Bis 1.0.2 versuchte dieses Skript, die Rechtedatei
+# selbst nach /etc/sudoers.d/ zu legen. Das konnte nie gelingen: postinstall.sh
+# laeuft als loxberry (plugininstall.pl: sudo -n -u loxberry), und loxberry
+# darf weder install noch test als root. Am Geraet gemessen (17.09.2026):
+# /etc/sudoers.d/funkwacht fehlte, der Reiter Test meldete "systemctl=ja
+# docker=nein uhubctl=nein tee=nein" - geheilt wurde nichts ausser einem
+# Dienstneustart, und den erlaubte eine fremde Regel.
+#
+# Seit 1.0.3 liegt die Datei als sudoers/sudoers im Archiv. plugininstall.pl
+# kopiert sie als root nach <LoxBerry>/system/sudoers/<NAME> - VOR diesem
+# Skript. /etc/sudoers.d ist auf dem LoxBerry ein Verweis dorthin.
+#
+# Hier wird nur noch GEMESSEN, ob sie angekommen ist und greift. visudo -c -f
+# braucht dafuer kein root (am Geraet gemessen: "parsed OK" als Benutzer).
+RD=/etc/sudoers.d/funkwacht
+if [ -f "$RD" ]; then
+    if visudo -c -f "$RD" >/dev/null 2>&1; then
+        if sudo -n -l 2>/dev/null | grep -q "/sys/bus/usb/drivers/usb/unbind"; then
+            echo "<OK> Rechtedatei $RD liegt und greift."
         else
-            sudo -n rm -f /etc/sudoers.d/funkwacht 2>/dev/null
-            echo "<FAIL> Die Rechtedatei war fehlerhaft und wurde wieder entfernt."
-            echo "<INFO> Das Plugin laeuft weiter, kann aber nur melden, nicht heilen."
+            echo "<INFO> Rechtedatei $RD liegt, sudo nennt die Heilbefehle aber nicht."
+            echo "<INFO> Reiter Test, Knopf 'Was kann dieses Geraet?' sagt, welcher fehlt."
         fi
     else
-        echo "<INFO> Die Rechtedatei konnte nicht nach /etc/sudoers.d/ gelegt werden."
-        echo "<INFO> Das Plugin meldet dann nur; geheilt wird nichts."
-        echo "<INFO> Nachholen als root mit:"
-        echo "<INFO>   install -o root -g root -m 0440 $SUD /etc/sudoers.d/funkwacht"
-        echo "<INFO>   visudo -c -f /etc/sudoers.d/funkwacht"
+        echo "<WARNING> Die Rechtedatei $RD ist fehlerhaft - sudo koennte fuer das ganze System gestoert sein."
     fi
 else
-    echo "<INFO> sudoers-Vorlage nicht gefunden - Rechtedatei wurde nicht angelegt."
+    echo "<INFO> Die Rechtedatei $RD fehlt - der Waechter meldet dann nur, geheilt wird nichts."
+    echo "<INFO> Sie kommt mit dem Plugin-Archiv (sudoers/sudoers); eine Neuinstallation legt sie an."
 fi
 
 # ---------- Selbsttest des Rechenkerns ----------

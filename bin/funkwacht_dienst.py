@@ -63,10 +63,17 @@ import subprocess
 import sys
 import time
 
+# Kein Bytecode in bin/plugins/<ordner>/. Am Geraet gemessen (17.09.2026):
+# der Selbsttestaufruf aus postinstall.sh legte __pycache__/fw_pruef.*.pyc im
+# installierten Ordner an - ein Rest, den kein Archiv kennt und den
+# geraetestand_vergleichen.py als "am Geraet, nicht im Tag" meldet.
+# PYTHONDONTWRITEBYTECODE vererbt sich nur, wenn jeder Aufrufer es setzt;
+# diese Zeile gilt fuer jeden Weg, auf dem die Datei startet.
+sys.dont_write_bytecode = True
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import fw_pruef  # noqa: E402
+import fw_fassung  # noqa: E402
 
-FASSUNG = "1.0.0"
 laeuft = True
 
 # Wo der USB-Baum liegt. Als Konstante und nicht fest im Text, damit
@@ -770,6 +777,65 @@ def felder(stand: dict) -> list:
     return aus
 
 
+# Retain je THEMENSTAMM - Hausstandard seit 03.09.2026 (Regeln/07): Zustaende
+# retained, Messwerte mit Zeitbezug nicht, das Lebenszeichen nie.
+#
+# Bis 1.0.2 ging alles als "publish" hinaus. Am Geraet gemessen (17.09.2026):
+# `mosquitto_sub -t 'funkwacht/#' --retained-only` lieferte nichts. Nach einem
+# Neustart des Miniservers oder des Gateways standen die Eingaenge damit leer,
+# bis der naechste Durchlauf sie fuellte.
+#
+# Die drei Fragen, die der Hausstandard offenlaesst, hier entschieden:
+# * Eine DAUER altert von selbst und ist nie retained (alter, seit, wartung -
+#   "Sekunden, die die Wartung noch laeuft"): zurueckbehalten stuende nach
+#   einer Woche noch "vor 3 s gehoert" da.
+# * Ein ABSOLUTER ZEITSTEMPEL ist retained (letzte): er sagt genau, wann.
+# * Ein ZAEHLFENSTER veraltet wie eine Dauer (heil24, heil7t): eine Heilung
+#   faellt nach 24 h von selbst heraus, ohne dass jemand sendet.
+# * Ein Text, der REGELMAESSIG LEER ist (warum, bemerkung), ist nie retained:
+#   leere Werte gehen gar nicht hinaus (mqtt_senden), ein zurueckbehaltener
+#   Text bliebe dann fuer immer stehen.
+# * ts ist das Lebenszeichen und deshalb nie retained - retained zeigte es
+#   immer "lebt".
+# Unbekannter Stamm: publish. Die Oberflaeche fuehrt dieselbe Tabelle
+# (fw_mqtt_retain() in fw_lib.php); der Reiter Test haelt beide gegeneinander.
+RETAIN = {
+    "ok": 1, "krank": 1, "geraete": 1, "geheilt_gesamt": 1,
+    "versuche_gesamt": 1, "alarm": 1, "gesperrt": 1,
+    "wartung": 0, "ts": 0,
+    "geraetN/ok": 1, "geraetN/stufe": 1, "geraetN/alter": 0,
+    "geraetN/heilungen": 1, "geraetN/versuche": 1, "geraetN/abgelehnt": 1,
+    "geraetN/heil24": 0, "geraetN/heil7t": 0, "geraetN/seit": 0,
+    "geraetN/letzte": 1, "geraetN/neustarts": 1, "geraetN/grundnr": 1,
+    "geraetN/warumnr": 1, "geraetN/name": 1, "geraetN/grund": 1,
+    "geraetN/warum": 0, "geraetN/letzte_tat": 1, "geraetN/bemerkung": 0,
+}
+
+
+def thema_stamm(thema: str) -> str:
+    """'geraet12/ok' -> 'geraetN/ok'; Summenthemen bleiben, wie sie sind."""
+    return re.sub(r"^geraet[0-9]+/", "geraetN/", str(thema))
+
+
+def retain_fuer(thema: str) -> bool:
+    return bool(RETAIN.get(thema_stamm(thema), 0))
+
+
+def themen_tabelle() -> dict:
+    """Jeder Stamm, den felder() erzeugen kann, mit seinem Retain-Wert.
+
+    Gebaut aus einem ausgedachten Stand mit einem Geraet - so kommt jeder
+    Stamm genau einmal vor, auch der eines Geraets. Ein Stamm ohne Eintrag in
+    RETAIN erscheint mit None: das ist der Befund, den der Reiter Test meldet.
+    """
+    probe = {"ok": 1, "geraete": {"1": {"name": "Probe"}}}
+    aus = {}
+    for thema, _feld, _wert in felder(probe):
+        stamm = thema_stamm(thema)
+        aus[stamm] = RETAIN.get(stamm)
+    return aus
+
+
 # ======================================================================
 # MQTT ueber den UDP-Eingang des Gateways
 # ======================================================================
@@ -802,7 +868,10 @@ def mqtt_senden(paare, praefix):
         for k, v in paare:
             if v is None or v == "":
                 continue
-            zeile = "publish %s/%s %s" % (praefix, k, mqtt_wert_saeubern(v))
+            # "retain" ist ein eigener Befehl des UDP-Eingangs, gleichrangig
+            # mit "publish" (mqttgateway.pl, gemessen 06.09.2026, Regeln/07).
+            befehl_wort = "retain" if retain_fuer(k) else "publish"
+            zeile = "%s %s/%s %s" % (befehl_wort, praefix, k, mqtt_wert_saeubern(v))
             s.sendto(zeile.encode("utf-8"), ("127.0.0.1", port))
         s.close()
         return True
@@ -1303,6 +1372,53 @@ def von_hand_heilen(cfg, hist, tabu, wunsch):
     return "\n".join(z)
 
 
+def dienst_selbsttest():
+    """Faelle, die den Dienst betreffen und nicht den reinen Rechenkern."""
+    zeilen, stand = [], {"n": 0, "f": 0}
+
+    def pr(name, ist, soll):
+        stand["n"] += 1
+        if ist == soll:
+            zeilen.append("[ OK ] " + name)
+        else:
+            stand["f"] += 1
+            zeilen.append("[FEHL] %s: erhalten %r, erwartet %r" % (name, ist, soll))
+
+    zeilen.append("")
+    zeilen.append("-- Retain je Themenstamm --")
+    tab = themen_tabelle()
+    pr("jeder Stamm aus felder() steht in RETAIN",
+       sorted(k for k, v in tab.items() if v is None), [])
+    pr("RETAIN nennt keinen Stamm, den felder() nicht erzeugt",
+       sorted(set(RETAIN) - set(tab)), [])
+    pr("das Lebenszeichen ts ist nie retained", retain_fuer("ts"), False)
+    pr("ein Zustand ist retained", retain_fuer("ok"), True)
+    pr("eine Dauer ist nicht retained", retain_fuer("geraet3/alter"), False)
+    pr("die Stammbildung trifft zweistellige Nummern",
+       thema_stamm("geraet12/stufe"), "geraetN/stufe")
+    pr("ein absoluter Zeitstempel ist retained", retain_fuer("geraet1/letzte"), True)
+    pr("ein unbekanntes Thema geht als publish", retain_fuer("gibt/es/nicht"), False)
+
+    zeilen.append("")
+    zeilen.append("-- Fassung aus einer Quelle --")
+    import tempfile
+    with tempfile.TemporaryDirectory() as t:
+        os.makedirs(os.path.join(t, "data", "system"))
+        with open(os.path.join(t, "data", "system", "plugindatabase.json"), "w",
+                  encoding="utf-8") as fh:
+            json.dump({"plugins": {"x1": {"folder": "andere", "version": "9.9.9"},
+                                   "x2": {"folder": "funkwacht01", "version": "4.5.6"}}}, fh)
+        pr("die Datenbank wird ueber den Ordnernamen gelesen",
+           fw_fassung.plugin_fassung("funkwacht01", t, hier=os.path.join(t, "leer")), "4.5.6")
+        pr("ein fremder Ordner liefert nichts Erfundenes",
+           fw_fassung.plugin_fassung("gibtsnicht", t, hier=os.path.join(t, "leer")), "")
+    pr("im entpackten Archiv kommt sie aus plugin.cfg",
+       fw_fassung.plugin_fassung("gibtsnicht", "") != "",
+       os.path.isfile(os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                                   "..", "plugin.cfg")))
+    return stand["n"], stand["f"], zeilen
+
+
 # ======================================================================
 # Aufruf
 # ======================================================================
@@ -1313,13 +1429,27 @@ def main():
 
     if "--selbsttest" in argv:
         n, f, text = fw_pruef.selbsttest()
-        print(text)
-        return 1 if f else 0
+        n2, f2, zeilen = dienst_selbsttest()
+        # EINE Kopfzeile mit der Summe: freigabe_pruefen.py liest die erste
+        # Zeile der Form "N Faelle geprueft, M Fehlschlaege". Ein Fehlschlag
+        # im zweiten Teil, der dort nicht mitzaehlt, waere unsichtbar.
+        kopf, _, rest = text.partition("\n")
+        print("Funkwacht-Kern %s und Dienst: %d Faelle geprueft, %d Fehlschlaege."
+              % (fw_pruef.FASSUNG, n + n2, f + f2))
+        print(rest.lstrip("\n"))
+        print("\n".join(zeilen))
+        return 1 if (f + f2) else 0
+
+    if "--themen" in argv:
+        # Fuer den Reiter Test: welche Themen sendet der Waechter, und welche
+        # davon retained? Die Oberflaeche haelt ihre eigene Tabelle dagegen.
+        print(json.dumps(themen_tabelle(), ensure_ascii=False, sort_keys=True))
+        return 0
 
     if "--faehigkeit" in argv:
         f = faehigkeiten()
         f["systemgeraete"] = systemgeraete()
-        f["fassung"] = FASSUNG
+        f["fassung"] = fw_fassung.plugin_fassung()
         f["kern"] = fw_pruef.FASSUNG
         f["betriebsdauer"] = betriebsdauer()
         print(json.dumps(f, ensure_ascii=False, indent=1))

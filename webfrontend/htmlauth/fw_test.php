@@ -147,6 +147,47 @@ function fw_probe_bestand()
                                date('d.m.Y H:i', (int) @filemtime($p['bestand']))));
 }
 
+/**
+ * Senden Waechter und Oberflaeche dieselben Themen - mit demselben Retain?
+ *
+ * Gesendet wird in Python (RETAIN in funkwacht_dienst.py), angezeigt in PHP
+ * (fw_mqtt_retain(), fw_mqtt_themen()). Zwei Tabellen fuer dieselbe Sache
+ * laufen auseinander, sobald eine allein geaendert wird; diese Zeile merkt es.
+ * Gemeldet wird die Zahl der GEMESSENEN Themen, nicht der erwarteten.
+ * Laesst sich der Waechter nicht befragen, heisst das "nicht gemessen" - kein
+ * Kreuz, das nichts bedeutet.
+ */
+function fw_probe_themen()
+{
+    $d = fw_dienst_datei();
+    if ($d === '') { return array(null, fw_klartext('TEST.M_KEIN_DIENST')); }
+    $aus = array();
+    $rc = -1;
+    @exec(escapeshellcmd(fw_python()) . ' ' . escapeshellarg($d) . ' --themen 2>&1', $aus, $rc);
+    $py = json_decode(implode("\n", $aus), true);
+    if ($rc !== 0 || !is_array($py) || !$py) {
+        return array(null, fw_klartext('TEST.P_THEMEN_NICHT'));
+    }
+    $php = fw_mqtt_retain();
+    $tabelle = fw_mqtt_themen();
+    $abw = array();
+    $alle = array_unique(array_merge(array_keys($py), array_keys($php), array_keys($tabelle)));
+    sort($alle);
+    foreach ($alle as $k) {
+        $a = array_key_exists($k, $py) ? ($py[$k] === null ? '?' : (string) (int) $py[$k]) : '-';
+        $b = array_key_exists($k, $php) ? (string) (int) $php[$k] : '-';
+        $c = array_key_exists($k, $tabelle) ? '' : ' (ohne Zeile in der Thementabelle)';
+        if ($a !== $b || $c !== '') {
+            $abw[] = $k . ': ' . $a . '/' . $b . $c;
+        }
+    }
+    if ($abw) {
+        return array(false, sprintf(fw_klartext('TEST.P_THEMEN_ABW'), implode('; ', $abw)));
+    }
+    return array(true, sprintf(fw_klartext('TEST.P_THEMEN_OK'), count($py),
+                               count(array_filter($py))));
+}
+
 /** Zaehlen Oberflaeche und Waechter die Sticks gleich? */
 function fw_probe_nummern()
 {
@@ -370,6 +411,9 @@ function fw_test_selbstpruefung()
 
     list($b_ok, $b_txt) = fw_probe_bestand();
     $o[] = fw_pruefzeile(fw_klartext('TEST.P_F_BESTAND'), $b_ok, $b_txt);
+
+    list($t_ok, $t_txt) = fw_probe_themen();
+    $o[] = fw_pruefzeile(fw_klartext('TEST.P_F_THEMEN'), $t_ok, $t_txt);
 
     list($n_ok, $n_kreuz, $n_ohne) = fw_pruefzeile(null);
     $o[] = '';

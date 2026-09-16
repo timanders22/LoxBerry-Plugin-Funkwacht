@@ -37,11 +37,17 @@ import re
 import subprocess
 import sys
 
+# Kein Bytecode in bin/plugins/<ordner>/. Am Geraet gemessen (17.09.2026):
+# der Selbsttestaufruf aus postinstall.sh legte __pycache__/fw_pruef.*.pyc im
+# installierten Ordner an - ein Rest, den kein Archiv kennt und den
+# geraetestand_vergleichen.py als "am Geraet, nicht im Tag" meldet.
+# PYTHONDONTWRITEBYTECODE vererbt sich nur, wenn jeder Aufrufer es setzt;
+# diese Zeile gilt fuer jeden Weg, auf dem die Datei startet.
+sys.dont_write_bytecode = True
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import fw_pruef  # noqa: E402
+import fw_fassung  # noqa: E402
 import funkwacht_dienst as fw  # noqa: E402
-
-FASSUNG = "1.0.0"
 
 # Woran ein Dienst oder ein Container nach Funk aussieht. Die Liste ist ein
 # VORSCHLAG, kein Filter: --dienste gibt auf Wunsch alles aus.
@@ -258,7 +264,7 @@ def selbsttest() -> tuple:
     pr("leer ergibt nichts", hub_und_port(""), ("", 0))
 
     kopf = "Funkwacht-Suchhilfe %s: %d Faelle geprueft, %d Fehlschlaege." % (
-        FASSUNG, stand["n"], stand["f"])
+        fw_fassung.plugin_fassung() or "ohne Fassungsangabe", stand["n"], stand["f"])
     return stand["n"], stand["f"], kopf + "\n\n" + "\n".join(zeilen)
 
 

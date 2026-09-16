@@ -1,5 +1,16 @@
 # Funkwacht - genau die Befehle, die zum Heilen gebraucht werden.
 #
+# WO DIESE DATEI HINKOMMT
+# LoxBerry kopiert sudoers/sudoers aus dem Plugin-Archiv selbst, als root,
+# nach <LoxBerry>/system/sudoers/<NAME aus plugin.cfg> (plugininstall.pl,
+# "Copy Sudoers file", Rechte 644, Eigentuemer root). /etc/sudoers.d ist auf
+# dem LoxBerry ein Verweis genau auf diesen Ordner. Vor jedem Upgrade und beim
+# Deinstallieren loescht der Installer sie auch wieder.
+# Bis 1.0.2 lag sie als bin/sudoers.funkwacht im Archiv, und postinstall.sh
+# sollte sie ablegen - das lief als loxberry und konnte es nie (am Geraet
+# gemessen 17.09.2026: die Datei fehlte, geheilt wurde nichts).
+#
+# WAS SIE ERLAUBT
 # Absichtlich KEIN uneingeschraenktes ALL und kein "sh -c": der Dienst laeuft
 # als loxberry, und kein Wert aus der Konfiguration - ein Dienstname, ein
 # USB-Pfad - soll zu einem zweiten Befehl werden koennen. Der USB-Pfad geht
@@ -9,6 +20,8 @@
 # zusammengelegt sind, auf aelteren Systemen aber nicht. sudo loest den
 # Befehl ueber PATH auf und vergleicht dann den vollstaendigen Pfad; ein
 # Eintrag ohne Argumente erlaubt AUCH NUR den Aufruf ohne Argumente.
+#
+# Geprueft vor der Auslieferung mit visudo -c -f (am Geraet: parsed OK).
 loxberry ALL=(root) NOPASSWD: /bin/systemctl restart *
 loxberry ALL=(root) NOPASSWD: /usr/bin/systemctl restart *
 loxberry ALL=(root) NOPASSWD: /usr/bin/docker restart *

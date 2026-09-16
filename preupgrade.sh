@@ -72,7 +72,26 @@ fi
 # Den Dienst anhalten, BEVOR seine Dateien ersetzt werden. Ein laufender
 # Prozess, dessen Quelltext unter ihm ausgetauscht wird, ist eine Wette;
 # postinstall.sh startet ihn hinterher ohnehin neu.
+#
+# Und SAGEN, was geschah - nach der Wirkung, nicht nach dem Aufruf. Bis 1.0.2
+# hielt das Skript stumm an; preupgrade_meldung_pruefen.py meldete dazu
+# "lief: es wird gesagt, dass angehalten wurde" als Fehlschlag. Als laufend
+# gilt, was status mit 0 beantwortet ODER was eine Prozessnummer nennt: der
+# Waechter kann laufen, waehrend status wegen eines fehlenden Mithoerers 3
+# sagt.
 DIENST="$BASE/bin/plugins/$PFOLDER/dienst.sh"
-[ -x "$DIENST" ] && "$DIENST" stop >/dev/null 2>&1
+if [ -x "$DIENST" ]; then
+    LAGE=$("$DIENST" status 2>/dev/null); LAGE_RC=$?
+    "$DIENST" stop >/dev/null 2>&1
+    if [ "$LAGE_RC" = "0" ] || printf '%s' "$LAGE" | grep -q "laeuft (PID"; then
+        if "$DIENST" status 2>/dev/null | grep -q "laeuft (PID"; then
+            echo "<WARNING> Der Waechter liess sich vor der Aktualisierung nicht anhalten."
+        else
+            echo "<INFO> Der laufende Waechter wurde fuer die Aktualisierung angehalten; postinstall.sh startet ihn danach wieder."
+        fi
+    else
+        echo "<INFO> Der Waechter lief nicht - es war nichts anzuhalten."
+    fi
+fi
 echo "<OK> preupgrade abgeschlossen."
 exit 0

@@ -58,14 +58,29 @@ import signal
 import sys
 import time
 
+# Kein Bytecode in bin/plugins/<ordner>/. Am Geraet gemessen (17.09.2026):
+# der Selbsttestaufruf aus postinstall.sh legte __pycache__/fw_pruef.*.pyc im
+# installierten Ordner an - ein Rest, den kein Archiv kennt und den
+# geraetestand_vergleichen.py als "am Geraet, nicht im Tag" meldet.
+# PYTHONDONTWRITEBYTECODE vererbt sich nur, wenn jeder Aufrufer es setzt;
+# diese Zeile gilt fuer jeden Weg, auf dem die Datei startet.
+sys.dont_write_bytecode = True
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import fw_pruef  # noqa: E402
-
-FASSUNG = "1.0.2"
+import fw_fassung  # noqa: E402
 laeuft = True
 
-# Die CONNACK-Codes von MQTT 3.1.1. paho reicht sie unveraendert durch,
-# und sie sind das Erste, was man bei einem stummen Mithoerer wissen will.
+# Die Gruende, aus denen ein Broker die Anmeldung abweist - das Erste, was man
+# bei einem stummen Mithoerer wissen will.
+#
+# BERICHTIGT in 1.0.3. Bis 1.0.2 stand hier "paho reicht sie unveraendert
+# durch", und die Tabelle kannte nur 0-5. Am Geraet gemessen (17.09.2026,
+# paho 2.1.0, paho.mqtt.client.convert_connack_rc_to_reason_code): mit
+# CallbackAPIVersion.VERSION2 kommt die Abweisung als Ursachencode von MQTT 5
+# an - 1->132, 2->133, 3->136, 4->134, 5->135. Falsche Zugangsdaten meldeten
+# deshalb "unbekannt (Code 134)", ausgerechnet der haeufigste Fall. paho 1.x
+# und der VERSION1-Rueckfall liefern weiter 1-5; beide Zaehlweisen gehoeren
+# hierher und muessen dasselbe sagen.
 CONNACK_TEXT = {
     0: "angenommen",
     1: "Protokollfassung abgelehnt",
@@ -73,6 +88,11 @@ CONNACK_TEXT = {
     3: "Broker nicht verfuegbar",
     4: "Benutzername oder Kennwort falsch",
     5: "nicht autorisiert",
+    132: "Protokollfassung abgelehnt",
+    133: "Client-Kennung abgelehnt",
+    136: "Broker nicht verfuegbar",
+    134: "Benutzername oder Kennwort falsch",
+    135: "nicht autorisiert",
 }
 
 
@@ -435,7 +455,16 @@ def selbsttest() -> tuple:
     # ---------- CONNACK-Texte ----------
     pr("Code 5 ist der, den man am haeufigsten sieht",
        CONNACK_TEXT[5], "nicht autorisiert")
-    pr("jeder Code hat einen Text", sorted(CONNACK_TEXT), [0, 1, 2, 3, 4, 5])
+    pr("jeder Code hat einen Text", sorted(CONNACK_TEXT),
+       [0, 1, 2, 3, 4, 5, 132, 133, 134, 135, 136])
+    # Die Paare, die dasselbe bedeuten muessen (paho 1.x gegen paho 2.x).
+    for alt, neu in ((1, 132), (2, 133), (3, 136), (4, 134), (5, 135)):
+        pr("Code %d und %d sagen dasselbe" % (alt, neu), CONNACK_TEXT[neu], CONNACK_TEXT[alt])
+    # Und so, wie paho 2.x ihn uebergibt: als Objekt mit .value.
+    rc_objekt = type("ReasonCode", (), {"value": 134})()
+    pr("ein Ursachenobjekt mit value 134 wird benannt",
+       CONNACK_TEXT.get(int(getattr(rc_objekt, "value", rc_objekt) or 0), "unbekannt"),
+       "Benutzername oder Kennwort falsch")
 
     # ---------- Zugang ----------
     # Ein Zugang ohne Benutzer ist zulaessig (ein Broker ohne Anmeldung),
@@ -447,7 +476,7 @@ def selbsttest() -> tuple:
     pr("der Zugang fuehrt ein Kennwortfeld", "pass" in z, True)
 
     kopf = "Funkwacht-Mithoerer %s: %d Faelle geprueft, %d Fehlschlaege." % (
-        FASSUNG, stand["n"], stand["f"])
+        fw_fassung.plugin_fassung() or "ohne Fassungsangabe", stand["n"], stand["f"])
     return stand["n"], stand["f"], kopf + "\n\n" + "\n".join(zeilen)
 
 

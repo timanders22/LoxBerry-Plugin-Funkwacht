@@ -1067,14 +1067,17 @@ if ($fw_rahmen) {
 <h3><?= fw_e(fw_t('MQTT.H_THEMEN')) ?></h3>
 <div class="sm-breit">
 <table class="sm-tbl">
-<tr><th><?= fw_e(fw_t('MQTT.SP_THEMA')) ?></th><th><?= fw_e(fw_t('MQTT.SP_BEDEUTUNG')) ?></th></tr>
+<tr><th><?= fw_e(fw_t('MQTT.SP_THEMA')) ?></th><th><?= fw_e(fw_t('MQTT.SP_BEDEUTUNG')) ?></th><th><?= fw_e(fw_t('MQTT.SP_RETAIN')) ?></th></tr>
+<?php $fw_retain = fw_mqtt_retain(); ?>
 <?php foreach (fw_mqtt_themen() as $fw_k => $fw_schl) { ?>
 <tr><td><span class="sm-mono"><?= fw_e($fw_cfg['mqtt_topic'] . '/' . $fw_k) ?></span></td>
-    <td><?= fw_e(fw_t($fw_schl)) ?></td></tr>
+    <td><?= fw_e(fw_t($fw_schl)) ?></td>
+    <td><?= fw_e(fw_t(!empty($fw_retain[$fw_k]) ? 'ALLG.JA' : 'ALLG.NEIN')) ?></td></tr>
 <?php } ?>
 </table>
 </div>
 <p class="sm-hilfe"><?= fw_t('MQTT.GERAETN_HILFE') ?></p>
+<p class="sm-hilfe"><?= fw_t('MQTT.RETAIN_HILFE') ?></p>
 </div>
 
 <!-- ================= Reiter: Einbindung in Loxone ================= -->

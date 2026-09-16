@@ -873,6 +873,34 @@ function fw_mqtt_themen()
     );
 }
 
+/**
+ * Retain je Themenstamm: 1 = zurueckbehalten, 0 = fluechtig.
+ *
+ * DIESELBE Tabelle wie RETAIN in bin/funkwacht_dienst.py - dort wird gesendet,
+ * hier wird angezeigt. Der Reiter Test haelt beide gegeneinander
+ * (fw_probe_themen(), ruft funkwacht_dienst.py --themen).
+ *
+ * Hausstandard seit 03.09.2026 (Regeln/07): Zustaende retained, Messwerte mit
+ * Zeitbezug nicht, das Lebenszeichen nie. Eine Dauer (alter, seit, wartung)
+ * und ein Zaehlfenster (heil24, heil7t) altern von selbst; ein Text, der
+ * regelmaessig leer ist (warum, bemerkung), bliebe zurueckbehalten fuer immer
+ * stehen; ts ist das Lebenszeichen.
+ */
+function fw_mqtt_retain()
+{
+    return array(
+        'ok' => 1, 'krank' => 1, 'geraete' => 1, 'geheilt_gesamt' => 1,
+        'versuche_gesamt' => 1, 'alarm' => 1, 'gesperrt' => 1,
+        'wartung' => 0, 'ts' => 0,
+        'geraetN/ok' => 1, 'geraetN/stufe' => 1, 'geraetN/alter' => 0,
+        'geraetN/heilungen' => 1, 'geraetN/versuche' => 1, 'geraetN/abgelehnt' => 1,
+        'geraetN/heil24' => 0, 'geraetN/heil7t' => 0, 'geraetN/seit' => 0,
+        'geraetN/letzte' => 1, 'geraetN/neustarts' => 1, 'geraetN/grundnr' => 1,
+        'geraetN/warumnr' => 1, 'geraetN/name' => 1, 'geraetN/grund' => 1,
+        'geraetN/warum' => 0, 'geraetN/letzte_tat' => 1, 'geraetN/bemerkung' => 0,
+    );
+}
+
 /* ==================================================================
  * Loxone-Vorlagen
  *
