@@ -692,19 +692,48 @@ function fw_verlauf_svg($werte, $breite = 900, $hoehe = 150)
  * Dienst
  * ================================================================== */
 
+/**
+ * Ist diese Nummer der eigene Dauerlaeufer?
+ *
+ * Dieselbe Probe wie in bin/dienst.sh, und aus demselben Anlass: bis 1.0.5
+ * genuegte hier, dass IRGENDEIN Argument den Dateinamen trug. Ein fremder
+ * Prozess  python3 -c '...' <dienstpfad>  bestand die Probe - am 18.09.2026
+ * am Aufrufweg der dienst.sh gemessen (Bestand-2026-09-18/klasse-F-
+ * nachmessung, Zeile 4b). Diese Funktion schickt zwar kein Signal, sie
+ * beantwortet aber die Frage "laeuft der Dienst?" fuer die Oberflaeche und
+ * fuer fw_dienst_schalten() - eine falsche Antwort ist dort eine
+ * Falschaussage, keine Kleinigkeit.
+ *
+ * Ein Treffer hat GENAU zwei Argumente: argv[0] ist ein Python, argv[1] ist
+ * genau der eigene Skriptpfad. Das dritte Argument schliesst die Einmallaeufe
+ * aus (--selbsttest, --faehigkeit, --einmal und die uebrigen).
+ */
+function fw_ist_dienst($pid, $skript)
+{
+    $cmd = @file_get_contents('/proc/' . (int) $pid . '/cmdline');
+    if ($cmd === false || $cmd === '') { return false; }
+    /* Die Befehlszeile endet mit einem Nullbyte - das gaebe ein leeres
+     * letztes Stueck, das kein Argument ist. */
+    if (substr($cmd, -1) === "\0") { $cmd = substr($cmd, 0, -1); }
+    $teile = explode("\0", $cmd);
+    if (count($teile) !== 2) { return false; }
+    /* preg_match statt einer Erweiterung: mb_* und ctype_* sind auf einem
+     * LoxBerry nicht garantiert geladen (Regeln/02). */
+    if (!preg_match('#(^|/)python[0-9.]*$#', $teile[0])) { return false; }
+    if ($teile[1] === $skript) { return true; }
+    $a = @realpath($teile[1]);
+    $b = @realpath($skript);
+    return ($a !== false && $b !== false && $a === $b);
+}
+
 function fw_dienst_pid($datei = 'dienst.pid', $prozess = 'funkwacht_dienst.py')
 {
-    $f = fw_paths()['datadir'] . '/' . $datei;
+    $p = fw_paths();
+    $f = $p['datadir'] . '/' . $datei;
     if (!is_file($f)) { return 0; }
     $pid = (int) trim((string) @file_get_contents($f));
     if ($pid <= 0) { return 0; }
-    /* Argumentweise pruefen, nicht per grep ueber die ganze Befehlszeile. */
-    $cmd = @file_get_contents('/proc/' . $pid . '/cmdline');
-    if ($cmd === false) { return 0; }
-    foreach (explode("\0", $cmd) as $teil) {
-        if (basename($teil) === $prozess) { return $pid; }
-    }
-    return 0;
+    return fw_ist_dienst($pid, $p['bindir'] . '/' . $prozess) ? $pid : 0;
 }
 
 function fw_mithoerer_pid() { return fw_dienst_pid('mithoerer.pid', 'fw_mqtt.py'); }

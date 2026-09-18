@@ -32,6 +32,29 @@ if [ -z "$BASE" ] || [ ! -d "$BASE" ]; then
     BASE=$(cd "$SELF/../.." 2>/dev/null && pwd)
 fi
 rm -f "$BASE/data/plugins/$PFOLDER/stand.json"
+
+# ---------- Die Marke aus preupgrade.sh wegraeumen ----------
+# Dies ist das LETZTE Hakenskript dieser Linie - ein postroot.sh gibt es
+# nicht. Die Marke faellt hier und nicht frueher: postinstall.sh hat den
+# Waechter mit FW_START_TROTZ_MARKE=1 schon gestartet, und faellt die Marke
+# vor diesem Start, kann der Minutentakt genau dazwischen einen ZWEITEN
+# Dienst starten. Gemessen am 18.09.2026 in WSL (200 Takte waehrend des
+# Hakenlaufs): mit dieser Reihenfolge ein Dienst.
+#
+# Bleibt sie liegen - abgebrochene Installation -, gilt sie nach 3600 s
+# ohnehin nicht mehr; dienst.sh rechnet das nach.
+MARKE="$BASE/data/plugins/$PFOLDER.upgrade_laeuft"
+if [ -f "$MARKE" ]; then
+    rm -f "$MARKE"
+    # Die Wirkung pruefen, nicht den Rueckgabewert.
+    if [ -f "$MARKE" ]; then
+        echo "<WARNING> Die Marke $MARKE liess sich nicht entfernen; der Waechter"
+        echo "<WARNING> startet erst wieder, wenn sie aelter als eine Stunde ist."
+    else
+        echo "<OK> Aktualisierung abgemeldet."
+    fi
+fi
+
 echo "<OK> postupgrade abgeschlossen - beim naechsten Durchlauf wird frisch gemessen."
 echo "<INFO> Zaehler und Verlauf wurden ueber die Aktualisierung gerettet."
 exit 0

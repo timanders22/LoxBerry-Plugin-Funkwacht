@@ -195,8 +195,13 @@ if [ -f "$PBIN/funkwacht_dienst.py" ]; then
 fi
 
 # ---------- Dienst starten ----------
+# FW_START_TROTZ_MARKE=1: hier SOLL der Waechter anlaufen, auch wenn die Marke
+# aus preupgrade.sh noch liegt - postupgrade.sh raeumt sie erst danach weg.
+# Die Reihenfolge ist Absicht: faellt die Marke vor dem Start, kann der
+# Minutentakt genau dazwischen einen zweiten Dienst starten. Am 18.09.2026 in
+# WSL mit 200 Takten waehrend des Hakenlaufs gemessen - ein Dienst, nicht zwei.
 if [ -x "$PBIN/dienst.sh" ]; then
-    "$PBIN/dienst.sh" restart >/dev/null 2>&1
+    FW_START_TROTZ_MARKE=1 "$PBIN/dienst.sh" restart >/dev/null 2>&1
     sleep 1
     if "$PBIN/dienst.sh" status >/dev/null 2>&1; then
         echo "<OK> Der Waechter laeuft."

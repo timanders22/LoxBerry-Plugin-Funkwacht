@@ -4,10 +4,76 @@
 Merkt, wenn ein Stick verstummt, weckt ihn in Stufen wieder auf — und misst
 nach, ob es geholfen hat.
 
-Version 1.0.4 · LoxBerry ab 3.0 · PHP 7.4 und 8.x · Python 3 mit paho-mqtt
+Version 1.0.5 · LoxBerry ab 3.0 · PHP 7.4 und 8.x · Python 3 mit paho-mqtt
 (Debian-Paket, über `dpkg/apt`)
 
 ---
+
+## Neu in 1.0.5
+
+**Wer ein Signal bekommt, wird vorher geprüft — Argument für Argument.**
+`bin/dienst.sh` erkannte den eigenen Dienst daran, dass *irgendeines* der
+Argumente eines Prozesses auf `/funkwacht_dienst.py` endete. Das trifft auch
+einen Prozess, der den Pfad nur nebenbei nennt. Am 18.09.2026 in einem
+Linux-Prüfstand gemessen: ein fremder Prozess `python3 -c '…' <Dienstpfad>`,
+dessen Nummer in `dienst.pid` stand, galt als Dienst — `status` meldete
+`Waechter laeuft (PID 5978)`, und nach `stop` war er tot. Für den Mithörer
+(`mithoerer.pid`, `fw_mqtt.py`) galt dasselbe.
+
+Ein Treffer hat jetzt genau zwei Argumente: das erste ist ein Python, das
+zweite ist genau der eigene Skriptpfad — bei relativem Start gegen das
+Arbeitsverzeichnis *des Prozesses* aufgelöst, nicht gegen das eigene. Ein
+Einmallauf (`--selbsttest`, `--einmal`, `--faehigkeit` …) trägt ein drittes
+Argument und ist deshalb kein Dienst; `stop` fasst ihn nicht mehr an.
+
+Daran hängen drei weitere Berichtigungen:
+
+- **`stop` nimmt auch einen Dienst ohne PID-Datei mit.** Der Installer löscht
+  `data/plugins/funkwacht/` bei jeder Aktualisierung, der Minutentakt kann in
+  dieser Lücke einen zweiten Wächter starten. Gemessen: `stop` meldete
+  „Funkwacht angehalten.“, und danach lief er weiter. Gesucht wird jetzt über
+  `/proc`, eingegrenzt auf den Dienstbenutzer, und zusätzlich über die
+  PID-Datei — die findet auch einen Dienst, der jemand anderem gehört.
+- **`uninstall` prüft ebenfalls vor dem Signal.** Ist `bin/dienst.sh`
+  vorhanden, räumt der Aufruf eine Zeile höher schon auf; fehlt es, stand
+  dort bisher ein `kill -9` auf die blanke Nummer aus der PID-Datei. Mit
+  unbrauchbarem `dienst.sh` gemessen: der fremde Prozess war tot.
+- **Die Oberfläche sagt nicht mehr „läuft“, wenn ein Fremder läuft.**
+  `fw_dienst_pid()` in `webfrontend/html/fw_lib.php` hielt jeden Prozess für
+  den Dienst, dessen Befehlszeile den Dateinamen irgendwo trug. Sie schickt
+  kein Signal, entscheidet aber, was nach „Dienst anhalten“ gemeldet wird.
+
+`status` und `start` melden seitdem die **gefundenen** Prozessnummern statt
+des Inhalts der PID-Datei, und `stop` sagt es, wenn doch etwas übrig bleibt.
+
+**Der Minutentakt startet den Wächter nicht mehr mitten in ein Update.**
+Zwischen dem Aufräumen durch den Installer und `postinstall.sh` liegt fast
+eine Minute — am Gerät gemessen 03:31:32 bis 03:32:24. In dieser Lücke ist
+`data/plugins/funkwacht/` gelöscht, und `cron/cron.01min` ruft trotzdem
+`dienst.sh start`. Am 18.09.2026 im Linux-Prüfstand nachgestellt: der Wächter
+lief an, schrieb `historie.json` mit leeren Zählern neu, und die Rettung in
+`postinstall.sh` fand die Datei vor und übersprang sich. Aus 4711 geheilten
+Sticks wurden 0. Im Wettlauf mit 200 Takten blieben am Ende **zwei** Wächter
+laufen.
+
+`preupgrade.sh` legt jetzt als Erstes `data/plugins/funkwacht.upgrade_laeuft`
+mit der Unixzeit an — neben dem Datenordner, denn der Ordner selbst wird ja
+gelöscht. Solange die Marke jünger als eine Stunde ist, startet `dienst.sh
+start` nichts und endet trotzdem sauber. Älter, aus der Zukunft oder ohne
+lesbare Uhrzeit: die Marke gilt nicht — eine abgebrochene Installation darf
+den Wächter nicht für immer stilllegen. Lässt sich die *Systemuhr* nicht
+lesen, fällt die Prüfung dagegen geschlossen aus: wer das Alter nicht messen
+kann, startet nicht. `postinstall.sh` startet den Wächter mit einer
+ausdrücklichen Ausnahme, `postupgrade.sh` räumt die Marke erst danach weg —
+diese Reihenfolge ist gemessen, umgekehrt liefen zwei Dienste. `uninstall`
+räumt die Marke ebenfalls weg.
+
+Der Reiter *Test* beantwortet die Frage jetzt mit: die Selbstprüfung sagt, ob
+eine Marke liegt und wie alt sie ist. Die Oberfläche wird **nicht** gesperrt:
+dafür gibt es in dieser Linie keinen gemessenen Schaden, und eine Sperre ohne
+Schaden nimmt dem Anwender nur die Seite.
+
+Prüfstand samt Eichung: `Pruefung-Funkwacht-1.0.5/`.
 
 ## Neu in 1.0.4
 
@@ -271,7 +337,7 @@ sein Schaden.
 
 ## Prüfstand
 
-* Reiter *Test*, Knopf **Selbstprüfung** — achtzehn Fragen mit Haken, Kreuz
+* Reiter *Test*, Knopf **Selbstprüfung** — neunzehn Fragen mit Haken, Kreuz
   oder „hier lässt sich nichts messen".
 * `python3 bin/funkwacht_dienst.py --selbsttest` — 115 Fälle: Rechenkern,
   Retain je Thema, Fassungsquelle; ohne Netz und ohne Geräte.

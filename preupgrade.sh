@@ -22,6 +22,31 @@ if [ -z "$BASE" ] || [ ! -d "$BASE" ]; then
     BASE=$(cd "$SELF/../.." 2>/dev/null && pwd)
 fi
 
+# ---------- Die Marke, als Erstes ----------
+# Zwischen purge_installation (unmittelbar nach diesem Skript) und
+# postinstall.sh liegt fast eine Minute; am Geraet gemessen 03:31:32 bis
+# 03:32:24 (Regeln/06). In dieser Luecke ruft cron/cron.01min "dienst.sh
+# start", und der Waechter lief mit leerem Datenordner an: er schrieb
+# historie.json neu, und die Rettung in postinstall.sh fand die Datei vor und
+# uebersprang sich - Zaehler und Verlauf waren nach jeder Aktualisierung weg.
+# Am 18.09.2026 in WSL nachgestellt und gemessen.
+#
+# Die Marke liegt NEBEN dem Datenordner, sonst loescht purge_installation sie
+# gleich mit. Sie traegt die Unixzeit; dienst.sh achtet sie, solange sie
+# juenger als 3600 s ist. postupgrade.sh raeumt sie weg, uninstall ebenfalls.
+# Als ERSTES, damit zwischen Marke und Luecke kein Takt liegt.
+MARKE="$BASE/data/plugins/$PFOLDER.upgrade_laeuft"
+mkdir -p "$BASE/data/plugins" 2>/dev/null
+if date +%s > "$MARKE" 2>/dev/null && [ -s "$MARKE" ]; then
+    echo "<OK> Aktualisierung angemeldet - der Minutentakt startet in der Luecke nichts."
+else
+    # Die Wirkung pruefen, nicht den Rueckgabewert. Ohne Marke laeuft die
+    # Aktualisierung weiter - nur eben mit dem alten Risiko.
+    rm -f "$MARKE" 2>/dev/null
+    echo "<WARNING> Die Marke $MARKE liess sich nicht anlegen; der Minutentakt"
+    echo "<WARNING> koennte den Waechter mitten in der Aktualisierung starten."
+fi
+
 CF="$BASE/config/plugins/$PFOLDER/funkwacht.json"
 if [ -f "$CF" ]; then
     cp -p "$CF" "$BASE/config/plugins/$PFOLDER.backup.json" \

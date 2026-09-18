@@ -125,6 +125,42 @@ function fw_probe_smactive()
  * und das setzt voraus, dass dort geschrieben werden darf. Diese Frage laesst
  * sich JETZT beantworten statt beim naechsten Update.
  */
+/**
+ * Liegt gerade eine Upgrade-Marke, und wie alt ist sie?
+ *
+ * preupgrade.sh legt data/plugins/<ordner>.upgrade_laeuft mit der Unixzeit an
+ * - NEBEN dem Datenordner, weil der Installer diesen bei jeder Aktualisierung
+ * loescht. Solange sie juenger als 3600 s ist, startet bin/dienst.sh nichts;
+ * postupgrade.sh raeumt sie danach weg.
+ *
+ * Im Betrieb liegt sie nicht, und genau das ist die gute Antwort. Liegt sie
+ * doch, ist das kein Fehler, sondern die Erklaerung dafuer, warum der
+ * Waechter gerade nicht anlaeuft - und danach sucht man sonst lange. Deshalb
+ * "hier laesst sich nichts messen" (null) und nicht "Kreuz".
+ */
+function fw_probe_marke()
+{
+    $p = fw_paths();
+    $f = $p['datadir'] . '.upgrade_laeuft';
+    if (!is_file($f)) {
+        return array(true, fw_klartext('TEST.P_MARKE_KEINE'));
+    }
+    $roh = trim((string) @file_get_contents($f));
+    if ($roh === '' || !preg_match('/^[0-9]+$/', $roh)) {
+        return array(null, sprintf(fw_klartext('TEST.P_MARKE_UNLESBAR'), $f));
+    }
+    $alter = time() - (int) $roh;
+    if ($alter < 0) {
+        return array(null, sprintf(fw_klartext('TEST.P_MARKE_ZUKUNFT'), $f));
+    }
+    if ($alter < 3600) {
+        return array(null, sprintf(fw_klartext('TEST.P_MARKE_FRISCH'),
+                                   (int) ($alter / 60)));
+    }
+    return array(null, sprintf(fw_klartext('TEST.P_MARKE_ALT'),
+                               (int) ($alter / 3600), $f));
+}
+
 function fw_probe_bestand()
 {
     $p = fw_paths();
@@ -411,6 +447,13 @@ function fw_test_selbstpruefung()
 
     list($b_ok, $b_txt) = fw_probe_bestand();
     $o[] = fw_pruefzeile(fw_klartext('TEST.P_F_BESTAND'), $b_ok, $b_txt);
+
+    /* 17. Laeuft gerade eine Aktualisierung? Die Marke erklaert, warum der
+     *     Waechter nicht anlaeuft - ohne diese Zeile sucht man den Grund in
+     *     der Konfiguration. Zur Regel gehoert das Werkzeug, das sie findet
+     *     (Kernschicht 6). */
+    list($m_ok, $m_txt) = fw_probe_marke();
+    $o[] = fw_pruefzeile(fw_klartext('TEST.P_F_MARKE'), $m_ok, $m_txt);
 
     list($t_ok, $t_txt) = fw_probe_themen();
     $o[] = fw_pruefzeile(fw_klartext('TEST.P_F_THEMEN'), $t_ok, $t_txt);
