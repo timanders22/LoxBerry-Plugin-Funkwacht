@@ -4,10 +4,52 @@
 Merkt, wenn ein Stick verstummt, weckt ihn in Stufen wieder auf — und misst
 nach, ob es geholfen hat.
 
-Version 1.0.5 · LoxBerry ab 3.0 · PHP 7.4 und 8.x · Python 3 mit paho-mqtt
+Version 1.0.6 · LoxBerry ab 3.0 · PHP 7.4 und 8.x · Python 3 mit paho-mqtt
 (Debian-Paket, über `dpkg/apt`)
 
 ---
+
+## Neu in 1.0.6
+
+**Die LoxBerry-Wurzel wird gelesen, nicht mehr geraten.** Bis 1.0.5 rechneten
+`bin/dienst.sh`, der Wächter, der Mithörer, die Oberfläche und alle vier
+Hakenskripte die Wurzel aus einer festen Zahl von Ebenen über dem eigenen
+Ablageort, oder sie suchten sie ohne `config/system/general.json`. In einem
+Linux-Prüfstand gemessen (24.09.2026): in einem fremden Verzeichnisbaum ohne
+`general.json` startete der Minutentakt den Wächter, `uninstall` löschte dort
+fremde Dateien, `postinstall.sh` und `preupgrade.sh` legten dort Ordner an,
+und `dienst.sh status` aus einem Prüfarchiv unter der Wurzel legte in der
+laufenden Installation Ordner an. Jetzt gilt überall: `$LBHOMEDIR` (bei den
+Hakenskripten das fünfte Argument des Installers) — und wenn es gesetzt ist,
+nur dieses —, sonst die Suche nach einem Verzeichnis mit `config/plugins`,
+`data/plugins` und `config/system/general.json`. Findet sich keine Wurzel,
+geschieht nichts: eine Meldung, ein Rückgabewert ungleich 0, und
+`dienst.sh status` antwortet dann mit 4 statt 3. Aus einem ausgepackten
+Archiv startet und hält `dienst.sh` nichts an; mit `LBHOMEDIR` und
+`LBPPLUGINDIR` verwaltet es den Dienst der Anlage. Der Ordnername fällt nicht
+mehr auf den festen Namen `funkwacht` zurück — ausgenommen die Hakenskripte,
+denen der Installer ihn ohnehin als drittes Argument mitgibt.
+
+**`status` und `stop` legen nichts mehr an.** Daten- und Protokollordner
+entstehen erst beim Start; nach dem Aufräumen einer Aktualisierung legte
+bisher schon ein `status` den Datenordner wieder an.
+
+**Die Upgrade-Marke gilt bis 300 Sekunden in der Zukunft** — die Uhr sprang
+nach dem Anlegen zurück. Weiter voraus, älter als eine Stunde oder unlesbar
+gilt sie nicht. Der Reiter *Test* zeigt dasselbe an.
+
+**Urteile des Wächters gehen nicht mehr retained an den Broker.** `ok`,
+`krank`, `alarm`, `gesperrt` und je Stick `ok`, `stufe`, `grund`, `grundnr`
+und `warumnr` sagt der Wächter über seine Sticks und über sich selbst — ein
+Funkstick meldet nie „ich bin gesund“. Zurückbehalten stünde nach einem
+Absturz des Wächters „alle Sticks gesund“ für immer im Broker. Diese Themen
+gehen jetzt flüchtig hinaus; zurückbehalten bleiben Einrichtung und Verlauf
+(10 von 27 Themenstämmen, bisher 19). Die zurückbehaltenen Altwerte früherer
+Fassungen räumt der Wächter einmal ab: direkt am Broker, mit leerer
+Nutzlast; danach liest er nach und merkt es sich erst, wenn nichts mehr
+zurückkommt. Der gültige Wert folgt im selben Durchgang. **Nach einem
+Neustart von Broker oder Gateway fehlen diese Werte deshalb, bis der Wächter
+das nächste Mal sendet.**
 
 ## Neu in 1.0.5
 
@@ -339,7 +381,7 @@ sein Schaden.
 
 * Reiter *Test*, Knopf **Selbstprüfung** — neunzehn Fragen mit Haken, Kreuz
   oder „hier lässt sich nichts messen".
-* `python3 bin/funkwacht_dienst.py --selbsttest` — 115 Fälle: Rechenkern,
+* `python3 bin/funkwacht_dienst.py --selbsttest` — 116 Fälle: Rechenkern,
   Retain je Thema, Fassungsquelle; ohne Netz und ohne Geräte.
 * `python3 bin/funkwacht_dienst.py --themen` — jedes gesendete Thema mit
   seinem Retain-Wert.
@@ -347,6 +389,8 @@ sein Schaden.
   paho-Anbindung, Anmeldegründe in beiden Zählweisen.
 * `python3 bin/fw_suche.py --selbsttest` — 17 Fälle der Suchhilfe.
 * `python3 bin/funkwacht_dienst.py --trocken` — was würde jetzt geschehen?
+  Wie `--heile` und `--einmal` nur im installierten Ordner oder mit
+  `LBHOMEDIR` und `LBPPLUGINDIR`; ohne gelesene Wurzel tut es nichts.
 * `python3 bin/funkwacht_dienst.py --heile 2:1` — Stick 2, Stufe 1, von Hand.
 * `python3 bin/fw_mqtt.py --probe 10` — zehn Sekunden am Broker zuhören.
 * `python3 bin/funkwacht_dienst.py --faehigkeit` — was dieses Gerät kann.

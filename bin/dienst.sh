@@ -44,19 +44,98 @@ if [ "$(id -u)" = "0" ] && id loxberry >/dev/null 2>&1; then
 fi
 
 SELF=$(cd "$(dirname "$(readlink -f "$0")")" && pwd)
-BASE=$(cd "$SELF/../../.." && pwd)       # von bin/plugins/<x> zur LoxBerry-Wurzel
+# ---------- Wurzel und Ordnername: GELESEN, nicht geraten ----------
+#
+# Bis 1.0.6 wurde die Wurzel drei Ebenen ueber dem eigenen Ablageort
+# gerechnet, und Daten- und Protokollordner hingen an dieser Rechnung, auch
+# wenn $LBHOMEDIR gesetzt war. In WSL gemessen (24.09.2026,
+# Pruefung-Funkwacht-1.0.6/messe_h1.sh; Bauart H1 aus
+# Bestand-2026-09-18/klasse-H): in einem fremden Baum ohne
+# config/system/general.json startete "start" den Waechter (Faelle F1-F4),
+# und mit einem LBHOMEDIR auf ein leeres Verzeichnis startete er mit der
+# geratenen Wurzel (Fall F6).
+#
+# Jetzt (Regeln/06; Vorbild Govee 0.9.20, VolkswagenID 0.9.24):
+#   1. $LBHOMEDIR, wenn gesetzt - und dann NUR diese. Traegt sie kein
+#      config/plugins und data/plugins, wird nichts geraten; ein gesetztes
+#      LBHOMEDIR wird nie durch eine andere Wurzel ersetzt.
+#   2. Ist es leer: aufwaerts suchen, bis ein Verzeichnis config/plugins,
+#      data/plugins UND config/system/general.json traegt (die dritte
+#      Bedingung seit dem Raumklima-Vorfall, Regeln/06).
+#   3. Sonst NICHTS: kein Rueckfall auf feste Ebenen, kein fester Pfad.
+#      Meldung, nichts anlegen, nichts starten, nichts anhalten. "status"
+#      antwortet mit 4 ("Zustand unbekannt", verschieden von 3 "steht"),
+#      alles andere mit 1. Die Meldung geht nur auf die Ausgabe: ohne
+#      Wurzel gibt es kein Protokoll, und der Cron leitet nach /dev/null.
+fw_wurzel_suchen() {
+    fw_v="$SELF"
+    fw_i=0
+    while [ -n "$fw_v" ] && [ "$fw_v" != "/" ] && [ "$fw_i" -lt 8 ]; do
+        if [ -d "$fw_v/config/plugins" ] && [ -d "$fw_v/data/plugins" ] \
+           && [ -f "$fw_v/config/system/general.json" ]; then
+            echo "$fw_v"
+            return 0
+        fi
+        fw_v=$(dirname "$fw_v")
+        fw_i=$((fw_i + 1))
+    done
+    return 1
+}
+BASE=""
+if [ -n "${LBHOMEDIR:-}" ]; then
+    if [ -d "$LBHOMEDIR/config/plugins" ] && [ -d "$LBHOMEDIR/data/plugins" ]; then
+        BASE="$LBHOMEDIR"
+    fi
+else
+    BASE=$(fw_wurzel_suchen) || BASE=""
+fi
+if [ -z "$BASE" ]; then
+    if [ -n "${LBHOMEDIR:-}" ]; then
+        echo "FEHLER: \$LBHOMEDIR ($LBHOMEDIR) traegt kein config/plugins und data/plugins."
+    else
+        echo "FEHLER: Es wurde kein LoxBerry-Wurzelverzeichnis gefunden: \$LBHOMEDIR ist"
+        echo "FEHLER: nicht gesetzt, und oberhalb von $SELF traegt kein Verzeichnis"
+        echo "FEHLER: config/plugins, data/plugins und config/system/general.json."
+    fi
+    echo "FEHLER: Es wurde nichts angelegt, nichts gestartet und nichts angehalten."
+    [ "${1:-}" = "status" ] && exit 4
+    exit 1
+fi
 
 # Den Ordnernamen NICHT festschreiben, sondern dort ablesen, wo das Skript
 # wirklich liegt. Beansprucht ein zweites Plugin denselben FOLDER, installiert
 # LoxBerry es nach "funkwacht01" - ein hartes "funkwacht" zeigte dann auf das
 # Verzeichnis des fremden Plugins. Steht die Umgebungsvariable schon, gilt sie.
-PLUGIN="${LBPPLUGINDIR:-$(basename "$SELF")}"
-case "$PLUGIN" in
-    bin|plugins|""|.|/) PLUGIN=funkwacht ;;
-esac
+#
+# Bis 1.0.6 fiel der Name fuer "bin" und "plugins" auf den festen Namen
+# funkwacht zurueck; aus einem ausgepackten Archiv hielt "stop" damit den
+# Dienst der Anlage an (Fall H10). Jetzt gilt nur, was gelesen ist; die
+# Gegenprobe weiter unten weist einen Aufruf aus einem Archiv ab.
+PLUGIN="${LBPPLUGINDIR:-}"
+PLUGIN="${PLUGIN%/}"
+PLUGIN="${PLUGIN##*/}"
+[ -n "$PLUGIN" ] || PLUGIN=$(basename "$SELF")
+# Der bin-Ordner DER ANLAGE - nicht zwingend der neben diesem Skript.
+PBIN="$BASE/bin/plugins/$PLUGIN"
 # Beide Python-Prozesse leiten ihre Pfade daraus ab - eine Wahrheit, nicht zwei.
 export LBPPLUGINDIR="$PLUGIN"
 export LBHOMEDIR="${LBHOMEDIR:-$BASE}"
+
+# Die Gegenprobe steht VOR allem, was schreibt (Vorbild Govee 0.9.20): liegt
+# dieses Skript nicht im bin-Ordner der Anlage, und ist <ordner> dort auch
+# kein eingerichtetes Plugin, kommt der Aufruf aus einem ausgepackten Archiv
+# oder einem Pruefordner - dann wird nichts angelegt, gestartet oder
+# angehalten (Faelle H1, H4, H5, H8, H10).
+if [ "$SELF" != "$(readlink -f "$PBIN" 2>/dev/null)" ] \
+   && [ ! -d "$BASE/config/plugins/$PLUGIN" ]; then
+    echo "FEHLER: '$PLUGIN' ist unter $BASE kein eingerichtetes Plugin, und"
+    echo "FEHLER: $SELF ist nicht dessen bin-Ordner. Der Aufruf kommt offenbar"
+    echo "FEHLER: aus einem ausgepackten Archiv oder einem Pruefordner. Es wurde"
+    echo "FEHLER: nichts angelegt. Abhilfe: LBHOMEDIR und LBPPLUGINDIR setzen oder"
+    echo "FEHLER: dienst.sh aus <LoxBerry-Wurzel>/bin/plugins/<ordner> aufrufen."
+    [ "${1:-}" = "status" ] && exit 4
+    exit 1
+fi
 
 DATA="$BASE/data/plugins/$PLUGIN"
 LOG="$BASE/log/plugins/$PLUGIN"
@@ -66,7 +145,10 @@ PY=$(command -v python3 || echo /usr/bin/python3)
 # eigene. Die Suche ueber /proc sieht nur dessen Prozesse an.
 DIENST_UID=$(id -u loxberry 2>/dev/null || id -u)
 
-mkdir -p "$DATA" "$LOG"
+# Angelegt wird erst beim START (im Zweig start unten), nicht bei jedem
+# Aufruf. Bis 1.0.6 stand hier ein mkdir fuer Daten- und Protokollordner:
+# nach purge_installation legte schon ein "status" den Datenordner wieder an
+# (Faelle H6, H7).
 
 # ---------- Die eigenen Prozesse erkennen ----------
 #
@@ -84,7 +166,10 @@ mkdir -p "$DATA" "$LOG"
 # aus (--einmal, --selbsttest, --faehigkeit, --themen, --trocken, --heile,
 # --probe): sie laufen als eigener Prozess, sind aber nicht der Dauerlaeufer
 # und duerfen von "stop" nicht getroffen werden. Der Dauerlaeufer wird an
-# genau einer Stelle gestartet, in start_p, als  "$PY" "$SELF/$2".
+# genau einer Stelle gestartet, in start_p, als  "$PY" "$PBIN/$2" - dem
+# Skript DER ANLAGE. Bis 1.0.6 stand dort $SELF: ein dienst.sh aus einem
+# ausgepackten Archiv verwaltete dann den Dienst des Archivs, waehrend der
+# Aufrufer mit LBHOMEDIR/LBPPLUGINDIR die Anlage meinte (Faelle H2, H3).
 #
 # Gelesen wird ohne Hilfsprogramm: "read -d ''" zerlegt die Befehlszeile am
 # Nullbyte. Das spart je Prozess einen Aufruf von tr - der Minutentakt ruft
@@ -130,7 +215,7 @@ ist_dienst() {
 #
 # $1 = PID-Datei, $2 = Skriptname
 dienste() {
-    fw_s="$SELF/$2"
+    fw_s="$PBIN/$2"
     fw_sr=$(readlink -f "$fw_s" 2>/dev/null)
     [ -n "$fw_sr" ] || fw_sr="$fw_s"
     {
@@ -164,7 +249,7 @@ start_p() {
         printf '%s\n' "$fw_l" | head -n 1 > "$1" 2>/dev/null
         return 0
     fi
-    nohup "$PY" "$SELF/$2" >> "$LOG/$3" 2>&1 &
+    nohup "$PY" "$PBIN/$2" >> "$LOG/$3" 2>&1 &
     echo $! > "$1"
     sleep 1
     # Die Wirkung pruefen, nicht den Rueckgabewert: nohup meldet Erfolg,
@@ -210,8 +295,12 @@ MPID="$DATA/mithoerer.pid"
 # Verlauf waren nach jeder Aktualisierung weg. Am 18.09.2026 in WSL gemessen
 # (Pruefung-Funkwacht-1.0.5/messe_luecke.sh, Fall 1).
 #
-# Aelter als 3600 s, aus der Zukunft oder unlesbar: die Marke gilt NICHT -
-# eine abgebrochene Installation darf den Dienst nicht fuer immer stilllegen.
+# Aelter als 3600 s, unlesbar oder MEHR als 300 s aus der Zukunft: die Marke
+# gilt NICHT - eine abgebrochene Installation darf den Dienst nicht fuer immer
+# stilllegen. Bis 300 s voraus gilt sie: die Uhr sprang nach dem Anlegen
+# zurueck (NTP). Bis 1.0.6 galt jede Marke aus der Zukunft nicht (Faelle V1,
+# V2). Gerechnet wird erst, nachdem Inhalt und Uhr als Zahl geprueft sind -
+# bash wertet in $(( )) den INHALT einer Variablen aus (Klasse M, Fall V6).
 # OHNE LESBARE UHR faellt die Pruefung GESCHLOSSEN aus: wer die Zeit nicht
 # messen kann, kann das Alter nicht beurteilen und startet deshalb nicht.
 #
@@ -228,7 +317,7 @@ upgrade_laeuft() {
     fw_dann=""
     IFS= read -r fw_dann < "$MARKE" 2>/dev/null
     case "$fw_dann" in ''|*[!0-9]*) return 1 ;; esac
-    [ "$fw_dann" -gt "$fw_jetzt" ] && return 1
+    [ "$fw_dann" -gt $((fw_jetzt + 300)) ] && return 1
     [ $((fw_jetzt - fw_dann)) -lt 3600 ]
 }
 
@@ -249,6 +338,7 @@ case "$1" in
             exit 0
         fi
         RC=0
+        mkdir -p "$DATA" "$LOG" 2>/dev/null
         # Gemeldet werden die GEFUNDENEN Nummern, nicht der Inhalt der
         # PID-Datei: liegt dort eine fremde oder veraltete Nummer, waere sie
         # eine Falschaussage. Laufen zwei, stehen beide da.

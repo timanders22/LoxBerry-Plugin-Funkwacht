@@ -150,12 +150,15 @@ function fw_probe_marke()
         return array(null, sprintf(fw_klartext('TEST.P_MARKE_UNLESBAR'), $f));
     }
     $alter = time() - (int) $roh;
-    if ($alter < 0) {
+    /* Bis 300 s voraus gilt die Marke - dieselbe Grenze wie upgrade_laeuft()
+     * in bin/dienst.sh (die Uhr sprang nach dem Anlegen zurueck). Bis 1.0.6
+     * hiess hier schon 1 s voraus "gilt nicht" (Faelle P1, P2). */
+    if ($alter < -300) {
         return array(null, sprintf(fw_klartext('TEST.P_MARKE_ZUKUNFT'), $f));
     }
     if ($alter < 3600) {
         return array(null, sprintf(fw_klartext('TEST.P_MARKE_FRISCH'),
-                                   (int) ($alter / 60)));
+                                   (int) (max(0, $alter) / 60)));
     }
     return array(null, sprintf(fw_klartext('TEST.P_MARKE_ALT'),
                                (int) ($alter / 3600), $f));

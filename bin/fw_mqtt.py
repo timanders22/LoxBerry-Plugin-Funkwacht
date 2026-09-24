@@ -136,26 +136,47 @@ def eigener_ordner() -> str:
     Installiert steht es in bin/plugins/<ordner>/ - damit stimmt der Name auch
     dann, wenn LoxBerry wegen eines zweiten Plugins mit demselben FOLDER nach
     "funkwacht01" installiert hat. Im entpackten Archiv heisst der Ordner
-    schlicht "bin"; dann greift der vorgesehene Name.
+    schlicht "bin"; dann gibt es KEINEN Namen ('').
+
+    Erst LBPPLUGINDIR, dann der Ablageort. Den festen Namen "funkwacht" als
+    letzte Stufe gibt es seit 1.0.6 nicht mehr: aus einem Pruefarchiv
+    <Wurzel>/pruefung/x/bin lief sonst der Durchgang bzw. der Mithoerer auf
+    dem Ordner der Anlage (Pruefung-Funkwacht-1.0.6, Faelle Y1, Y2).
     """
+    o = (os.environ.get("LBPPLUGINDIR") or "").strip("/").split("/")[-1]
+    if o not in ("", ".", ".."):
+        return o
     name = os.path.basename(os.path.dirname(os.path.abspath(__file__)))
-    return "funkwacht" if name in ("bin", "plugins", "", ".", "/") else name
+    return "" if name in ("bin", "plugins", "", ".", "/") else name
 
 
 def pfade() -> dict:
     home = os.environ.get("LBHOMEDIR") or ""
-    if not home or not os.path.isdir(home):
+    if home:
+        # Ein gesetztes LBHOMEDIR gilt - oder gar nichts (Regeln/06).
+        if not (os.path.isdir(os.path.join(home, "config", "plugins"))
+                and os.path.isdir(os.path.join(home, "data", "plugins"))):
+            home = ""
+    else:
+        # Dritte Bedingung config/system/general.json (Regeln/06); bis 1.0.6
+        # galten config/plugins und webfrontend, und ein fremder Baum wurde
+        # Wurzel (Fall Y9).
         d = os.path.dirname(os.path.abspath(__file__))
         for _ in range(8):
             if os.path.isdir(os.path.join(d, "config", "plugins")) \
-                    and os.path.isdir(os.path.join(d, "webfrontend")):
+                    and os.path.isdir(os.path.join(d, "data", "plugins")) \
+                    and os.path.isfile(os.path.join(d, "config", "system", "general.json")):
                 home = d
                 break
             eltern = os.path.dirname(d)
             if eltern == d:
                 break
             d = eltern
-    ordner = os.environ.get("LBPPLUGINDIR") or eigener_ordner()
+    ordner = eigener_ordner()
+    if not home or not ordner:
+        # Ohne gelesene Wurzel oder Ordnernamen: KEINE Pfade (wie im Waechter).
+        return {"home": "", "config": "", "data": "", "stand": "", "log": "",
+                "general": ""}
     data = os.path.join(home, "data", "plugins", ordner)
     return {
         "home": home,
@@ -498,6 +519,14 @@ def main():
         i = argv.index("--probe")
         probe = int(fw_pruef.zahl(argv[i + 1] if len(argv) > i + 1 else 10, 10))
         probe = max(2, min(60, probe))
+
+    # Der Dauerlauf schreibt in die Anlage; ohne gelesene Wurzel geschieht
+    # nichts (Regeln/06). --probe schreibt nichts und darf ohne.
+    if not probe and not pfade()["home"]:
+        sys.stderr.write("FEHLER: Es wurde keine LoxBerry-Wurzel gelesen oder "
+                         "gefunden - es wurde nichts abonniert und nichts "
+                         "geschrieben.\n")
+        return 1
 
     m = themen()
     if not m:

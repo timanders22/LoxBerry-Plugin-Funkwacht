@@ -34,7 +34,12 @@ if (!function_exists('lb_wurzel_ermitteln')) {
     {
         $d = __DIR__;
         for ($i = 0; $i < 8; $i++) {
-            if (is_dir($d . '/config/plugins') && is_dir($d . '/webfrontend')) {
+            /* Dritte Bedingung config/system/general.json (Regeln/06):
+             * config/plugins und webfrontend allein traegt auch ein
+             * Pruefstandsrest; bis 1.0.6 meldete das Plugin dorthin
+             * (Pruefung-Funkwacht-1.0.6, Fall Q6). */
+            if (is_dir($d . '/config/plugins') && is_dir($d . '/data/plugins')
+                && is_file($d . '/config/system/general.json')) {
                 return $d;
             }
             $eltern = dirname($d);

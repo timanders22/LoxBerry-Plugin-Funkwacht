@@ -25,12 +25,49 @@
 # NEBEN den Ordner legt und postinstall.sh sie zurueckholt.
 ARGV3=$3
 ARGV5=$5
-PFOLDER="${ARGV3:-funkwacht}"
-BASE="${ARGV5:-$LBHOMEDIR}"
-if [ -z "$BASE" ] || [ ! -d "$BASE" ]; then
-    SELF=$(cd "$(dirname "$0")" && pwd)
-    BASE=$(cd "$SELF/../.." 2>/dev/null && pwd)
+PFOLDER="${ARGV3:-${LBPPLUGINDIR:-funkwacht}}"
+BASE="${ARGV5:-${LBHOMEDIR:-}}"
+# Die Wurzel wird GELESEN: $5 vom Installer, sonst $LBHOMEDIR - und dann
+# nur diese; traegt sie kein config/plugins und data/plugins, geschieht
+# nichts. Sind beide leer, wird vom eigenen Ablageort aufwaerts gesucht, bis
+# ein Verzeichnis config/plugins, data/plugins UND config/system/general.json
+# traegt (Regeln/06, Raumklima-Vorfall). Danach KEIN Rueckfall auf feste
+# Ebenen. Bis 1.0.6 stand hier ein Rueckfall ueber dem eigenen Ablageort,
+# ohne general.json und ohne Abbruch; in einem fremden Baum wurde dort
+# angelegt bzw. geloescht (Pruefung-Funkwacht-1.0.6/messe_haken.sh, Faelle
+# K1, K4, K6, K8).
+fw_wurzel_suchen() {
+    fw_v=$(cd "$1" 2>/dev/null && pwd -P) || return 1
+    fw_i=0
+    while [ -n "$fw_v" ] && [ "$fw_v" != "/" ] && [ "$fw_i" -lt 8 ]; do
+        if [ -d "$fw_v/config/plugins" ] && [ -d "$fw_v/data/plugins" ] \
+           && [ -f "$fw_v/config/system/general.json" ]; then
+            echo "$fw_v"
+            return 0
+        fi
+        fw_v=$(dirname "$fw_v")
+        fw_i=$((fw_i + 1))
+    done
+    return 1
+}
+if [ -z "$BASE" ]; then
+    BASE=$(fw_wurzel_suchen "$(dirname "$(readlink -f "$0")")") || BASE=""
+elif [ ! -d "$BASE/config/plugins" ] || [ ! -d "$BASE/data/plugins" ]; then
+    echo "<FAIL> $BASE (fuenftes Argument bzw. \$LBHOMEDIR) traegt kein config/plugins und data/plugins."
+    BASE=""
 fi
+if [ -z "$BASE" ]; then
+    echo "<FAIL> Es wurde keine LoxBerry-Wurzel gelesen oder gefunden: weder als fuenftes"
+    echo "<FAIL> Argument noch in \$LBHOMEDIR, und oberhalb von $(dirname "$0") traegt kein"
+    echo "<FAIL> Verzeichnis config/plugins, data/plugins und config/system/general.json."
+    echo "<FAIL> Es wurde nichts angelegt, nichts geloescht und kein Dienst angefasst."
+    exit 1
+fi
+case "$PFOLDER" in
+    ''|.|..|*/*)
+        echo "<FAIL> Ungueltiger Ordnername '$PFOLDER' - es wurde nichts angefasst."
+        exit 1 ;;
+esac
 rm -f "$BASE/data/plugins/$PFOLDER/stand.json"
 
 # ---------- Die Marke aus preupgrade.sh wegraeumen ----------

@@ -90,8 +90,13 @@ def wurzel() -> str:
     """Der LoxBerry-Wurzelordner - ohne festen Systempfad."""
     d = os.path.dirname(os.path.abspath(__file__))
     for _ in range(8):
+        # config/system/general.json ist die dritte Bedingung (Regeln/06,
+        # Raumklima-Vorfall): config/plugins und webfrontend allein traegt
+        # auch ein Pruefstandsrest - in einem solchen fremden Baum lief der
+        # Durchgang bis 1.0.6 (Fall Y8).
         if os.path.isdir(os.path.join(d, "config", "plugins")) \
-                and os.path.isdir(os.path.join(d, "webfrontend")):
+                and os.path.isdir(os.path.join(d, "data", "plugins")) \
+                and os.path.isfile(os.path.join(d, "config", "system", "general.json")):
             return d
         eltern = os.path.dirname(d)
         if eltern == d:
@@ -106,15 +111,49 @@ def eigener_ordner() -> str:
     Installiert steht es in bin/plugins/<ordner>/ - damit stimmt der Name auch
     dann, wenn LoxBerry wegen eines zweiten Plugins mit demselben FOLDER nach
     "funkwacht01" installiert hat. Im entpackten Archiv heisst der Ordner
-    schlicht "bin"; dann greift der vorgesehene Name.
+    schlicht "bin"; dann gibt es KEINEN Namen ('').
+
+    Erst LBPPLUGINDIR, dann der Ablageort. Den festen Namen "funkwacht" als
+    letzte Stufe gibt es seit 1.0.6 nicht mehr: aus einem Pruefarchiv
+    <Wurzel>/pruefung/x/bin lief sonst der Durchgang bzw. der Mithoerer auf
+    dem Ordner der Anlage (Pruefung-Funkwacht-1.0.6, Faelle Y1, Y2).
     """
+    o = (os.environ.get("LBPPLUGINDIR") or "").strip("/").split("/")[-1]
+    if o not in ("", ".", ".."):
+        return o
     name = os.path.basename(os.path.dirname(os.path.abspath(__file__)))
-    return "funkwacht" if name in ("bin", "plugins", "", ".", "/") else name
+    return "" if name in ("bin", "plugins", "", ".", "/") else name
+
+
+def lb_home() -> str:
+    """Die Wurzel: GELESEN, nicht geraten. '' heisst: es gibt keine.
+
+    Ein gesetztes LBHOMEDIR gilt, wenn darunter config/plugins und
+    data/plugins liegen - sonst gilt GAR NICHTS; es wird nie durch eine
+    gesuchte Wurzel ersetzt (Regeln/06). Bis 1.0.6 wurde es ungeprueft
+    genommen und darunter angelegt (Fall Y12). Nur ohne LBHOMEDIR wird
+    gesucht.
+    """
+    h = os.environ.get("LBHOMEDIR") or ""
+    if h:
+        if os.path.isdir(os.path.join(h, "config", "plugins")) \
+                and os.path.isdir(os.path.join(h, "data", "plugins")):
+            return h
+        return ""
+    return wurzel()
 
 
 def pfade() -> dict:
-    home = os.environ.get("LBHOMEDIR") or wurzel()
-    ordner = os.environ.get("LBPPLUGINDIR") or eigener_ordner()
+    home = lb_home()
+    ordner = eigener_ordner()
+    if not home or not ordner:
+        # Ohne gelesene Wurzel oder ohne Ordnernamen gibt es KEINE Pfade.
+        # Bis 1.0.6 entstanden sie dann relativ zum Arbeitsverzeichnis und
+        # wurden dort angelegt (Fall Y10). json_schreiben() und log()
+        # scheitern an einem leeren Pfad still; main() bricht vorher ab.
+        return {k: "" for k in ("home", "plugin", "config", "data", "stand",
+                                "historie", "auftraege", "mqtt_stand",
+                                "verlauf", "log", "general")}
     data = os.path.join(home, "data", "plugins", ordner)
     return {
         "home": home,
@@ -799,15 +838,31 @@ def felder(stand: dict) -> list:
 #   immer "lebt".
 # Unbekannter Stamm: publish. Die Oberflaeche fuehrt dieselbe Tabelle
 # (fw_mqtt_retain() in fw_lib.php); der Reiter Test haelt beide gegeneinander.
+#
+# BERICHTIGT in 1.0.6 (Regeln/07 Abschnitt 3, Entscheidungen des Hausherrn
+# vom 18./19.09.2026): eine Aussage des DIENSTES ist nie retained, und ok
+# schon gar nicht. Prueffrage je Thema: wer stellt es fest - das Geraet oder
+# der Dienst? Ein Funkstick meldet nie "ich bin gesund". ok, krank, alarm
+# und je Stick ok, grund und grundnr sind das URTEIL des Waechters aus dem
+# Alter seiner eigenen Messung; stufe und warumnr sind sein eigener Stand,
+# gesperrt seine eigene Sperre (sie kippt mit der Uhr, ohne dass jemand
+# sendet). Stirbt der Waechter, stuenden ok=1 und krank=0 zurueckbehalten im
+# Broker, und Loxone laese nach einem Neustart "alle Sticks gesund" von einem
+# toten Waechter. Bis 1.0.5 gingen diese neun retained hinaus (in WSL am
+# empfangenen Datagramm gemessen, Pruefung-Funkwacht-1.0.6/messe_retain.sh,
+# R1-R9); die Altwerte raeumt mqtt_altlast_abraeumen() einmal ab.
+# Retained bleiben Konfiguration (geraete, name) und Verlauf (die Summen,
+# letzte, letzte_tat): sie bleiben wahr, wenn der Waechter stirbt. neustarts
+# zaehlt systemd fuer den fremden Dienst, nicht der Waechter.
 RETAIN = {
-    "ok": 1, "krank": 1, "geraete": 1, "geheilt_gesamt": 1,
-    "versuche_gesamt": 1, "alarm": 1, "gesperrt": 1,
+    "ok": 0, "krank": 0, "geraete": 1, "geheilt_gesamt": 1,
+    "versuche_gesamt": 1, "alarm": 0, "gesperrt": 0,
     "wartung": 0, "ts": 0,
-    "geraetN/ok": 1, "geraetN/stufe": 1, "geraetN/alter": 0,
+    "geraetN/ok": 0, "geraetN/stufe": 0, "geraetN/alter": 0,
     "geraetN/heilungen": 1, "geraetN/versuche": 1, "geraetN/abgelehnt": 1,
     "geraetN/heil24": 0, "geraetN/heil7t": 0, "geraetN/seit": 0,
-    "geraetN/letzte": 1, "geraetN/neustarts": 1, "geraetN/grundnr": 1,
-    "geraetN/warumnr": 1, "geraetN/name": 1, "geraetN/grund": 1,
+    "geraetN/letzte": 1, "geraetN/neustarts": 1, "geraetN/grundnr": 0,
+    "geraetN/warumnr": 0, "geraetN/name": 1, "geraetN/grund": 0,
     "geraetN/warum": 0, "geraetN/letzte_tat": 1, "geraetN/bemerkung": 0,
 }
 
@@ -878,6 +933,159 @@ def mqtt_senden(paare, praefix):
     except Exception as e:
         log("MQTT: %s" % e, "mqtt_fehler")
         return False
+
+
+# ======================================================================
+# Zurueckbehaltene Altwerte einmal abraeumen (1.0.6)
+# ======================================================================
+#
+# Themen, die bis 1.0.5 retained hinausgingen und seit 1.0.6 fluechtig sind
+# (siehe RETAIN). Ein fluechtiges publish ersetzt einen zurueckbehaltenen
+# Wert im Broker NICHT; fort ist er erst, wenn eine LEERE Nutzlast mit retain
+# auf dasselbe Thema faellt.
+#
+# Das geschieht direkt am Broker (paho, python3-paho-mqtt aus dpkg/apt), nicht
+# ueber den UDP-Eingang des Gateways: der verwirft Datagramme in Stoessen, und
+# sendto() meldet auch fuer ein verworfenes Erfolg (Regeln/07, am Geraet
+# belegt am Beschattungswaechter 0.9.19 und KODI-NG 1.2.7: Merker gesetzt,
+# Altwert stand weiter im Broker). Deshalb: loeschen mit QoS 1, dann
+# NACHLESEN - ein neues Abonnement bekommt alles, was noch behalten ist - und
+# den Merker erst schreiben, wenn nichts mehr kommt.
+#
+# Der Merker liegt im Datenordner. purge_installation raeumt ihn bei jedem
+# Upgrade ab; dann wird einmal erneut nachgesehen - das kostet eine leere
+# Nutzlast je noch liegendem Thema und nichts, wenn keines mehr liegt. Seine
+# Kennung traegt Fassung, Praefix und Stammliste: kein Vorlaeufer schrieb
+# diese Datei, ein anderes Praefix oder eine andere Liste gilt nicht als
+# erledigt (Faelle R22, R25).
+RETAIN_ALTLAST = ("ok", "krank", "alarm", "gesperrt", "geraetN/ok",
+                  "geraetN/stufe", "geraetN/grundnr", "geraetN/warumnr",
+                  "geraetN/grund")
+RETAIN_ALTLAST_KENNUNG = "funkwacht-1.0.6-dienstaussagen"
+_altlast_naechster = 0.0
+
+
+def retain_merker_datei() -> str:
+    d = pfade()["data"]
+    return os.path.join(d, "retain_dienstaussagen_geraeumt") if d else ""
+
+
+def mqtt_altlast_abraeumen(praefix, warten=3.0) -> int:
+    """Rueckgabe 0 erledigt (auch: war schon erledigt), 1 Altwerte stehen
+    noch (naechster Versuch spaeter), 2 nicht moeglich (keine Wurzel, kein
+    paho, kein Broker, Anmeldung abgewiesen)."""
+    praefix = str(praefix or "").strip("/")
+    if not praefix or "#" in praefix or "+" in praefix:
+        return 2
+    merker = retain_merker_datei()
+    if not merker:
+        return 2
+    soll = "%s|%s|%s" % (RETAIN_ALTLAST_KENNUNG, praefix, ",".join(RETAIN_ALTLAST))
+    try:
+        with open(merker, "r", encoding="utf-8") as f:
+            if f.read().strip() == soll:
+                return 0
+    except OSError:
+        pass
+    try:
+        import paho.mqtt.client as mq
+    except ImportError:
+        log("MQTT: paho fehlt (python3-paho-mqtt) - die zurueckbehaltenen "
+            "Altwerte frueherer Fassungen lassen sich nicht abraeumen.",
+            "retain_altlast")
+        return 2
+    import threading
+    import fw_mqtt
+    zug = fw_mqtt.zugang()
+    gesehen = set()
+    angemeldet = threading.Event()
+    code = {"wert": None}
+
+    def gehoert_dazu(thema):
+        if not thema.startswith(praefix + "/"):
+            return False
+        return thema_stamm(thema[len(praefix) + 1:]) in RETAIN_ALTLAST
+
+    def bei_verbindung(_k, _d, _f, rc, *_r):
+        try:
+            code["wert"] = int(getattr(rc, "value", rc) or 0)
+        except (TypeError, ValueError):
+            code["wert"] = 0
+        angemeldet.set()
+
+    def bei_nachricht(_k, _d, n):
+        if n.retain and n.payload and gehoert_dazu(n.topic):
+            gesehen.add(n.topic)
+
+    # Eine EIGENE Kennung: mit derselben wie der Mithoerer wuerfen sich beide
+    # Verbindungen gegenseitig hinaus (MQTT-Regel; Hilfetext H_ID).
+    kennung = "funkwacht-abraeumen-%d" % os.getpid()
+    try:
+        k = mq.Client(mq.CallbackAPIVersion.VERSION2, client_id=kennung)
+    except (AttributeError, TypeError):
+        try:
+            k = mq.Client(mq.CallbackAPIVersion.VERSION1, client_id=kennung)
+        except (AttributeError, TypeError):
+            k = mq.Client(client_id=kennung)
+    k.on_connect = bei_verbindung
+    k.on_message = bei_nachricht
+    if zug.get("user"):
+        k.username_pw_set(zug["user"], zug.get("pass") or "")
+    try:
+        k.connect(zug["host"], zug["port"], 30)
+    except Exception as e:
+        log("MQTT: Broker %s:%s fuer das Abraeumen nicht erreichbar (%s) - die "
+            "zurueckbehaltenen Altwerte stehen noch im Broker."
+            % (zug["host"], zug["port"], e), "retain_altlast")
+        return 2
+    k.loop_start()
+    try:
+        if not angemeldet.wait(10) or code["wert"]:
+            log("MQTT: der Broker hat die Anmeldung fuer das Abraeumen nicht "
+                "angenommen (Code %s) - die Altwerte stehen noch im Broker."
+                % code["wert"], "retain_altlast")
+            return 2
+        k.subscribe(praefix + "/#")
+        time.sleep(warten)
+        k.unsubscribe(praefix + "/#")
+        zu_leeren = sorted(gesehen)
+        for thema in zu_leeren:
+            info = k.publish(thema, b"", qos=1, retain=True)
+            try:
+                info.wait_for_publish(5)
+            except TypeError:           # paho 1.x vor 1.6 kennt kein timeout
+                info.wait_for_publish()
+        # NACHLESEN: ein neues Abonnement bekommt alles, was noch behalten ist.
+        gesehen.clear()
+        k.subscribe(praefix + "/#")
+        time.sleep(warten)
+        rest = sorted(gesehen)
+    except Exception as e:
+        log("MQTT: das Abraeumen der Altwerte scheiterte (%s)." % e, "retain_altlast")
+        return 2
+    finally:
+        k.loop_stop()
+        try:
+            k.disconnect()
+        except Exception:
+            pass
+    if rest:
+        log("MQTT: %d von %d zurueckbehaltenen Altwerten stehen noch im Broker "
+            "(zum Beispiel %s) - neuer Versuch spaeter."
+            % (len(rest), len(zu_leeren), rest[0]), "retain_altlast")
+        return 1
+    # ERST JETZT der Merker - nach dem Nachlesen, nicht nach dem Senden.
+    try:
+        os.makedirs(os.path.dirname(merker), exist_ok=True)
+        with open(merker, "w", encoding="utf-8") as f:
+            f.write(soll + "\n")
+    except OSError as e:
+        log("MQTT: der Merker %s liess sich nicht schreiben (%s) - beim naechsten "
+            "Durchgang wird erneut nachgesehen." % (merker, e), "retain_merker")
+    if zu_leeren:
+        log("MQTT: %d zurueckbehaltene Altwerte frueherer Fassungen geloescht und "
+            "nachgelesen (%s)." % (len(zu_leeren), ", ".join(zu_leeren)))
+    return 0
 
 
 # ======================================================================
@@ -1231,10 +1439,20 @@ def melden(cfg, meldungen):
 
 
 def veroeffentlichen(cfg, stand):
+    global _altlast_naechster
     if not cfg.get("mqtt_ein"):
         return
+    praefix = cfg["mqtt_topic"].strip("/")
+    # Zuerst die Altwerte frueherer Fassungen abraeumen, UNMITTELBAR danach
+    # geht der gueltige Wert (fluechtig) hinaus - die leere Nutzlast steht
+    # so nur Sekunden im Miniserver. Scheitert es, kommt der naechste
+    # Versuch erst in zehn Minuten: ein fehlender Broker soll nicht jeden
+    # Takt um die Wartezeit verlaengern.
+    if time.time() >= _altlast_naechster:
+        if mqtt_altlast_abraeumen(praefix) != 0:
+            _altlast_naechster = time.time() + 600
     paare = [(m, w) for m, _, w in felder(stand)]
-    mqtt_senden(paare, cfg["mqtt_topic"].strip("/"))
+    mqtt_senden(paare, praefix)
 
 
 def beenden(signum, rahmen):
@@ -1392,7 +1610,8 @@ def dienst_selbsttest():
     pr("RETAIN nennt keinen Stamm, den felder() nicht erzeugt",
        sorted(set(RETAIN) - set(tab)), [])
     pr("das Lebenszeichen ts ist nie retained", retain_fuer("ts"), False)
-    pr("ein Zustand ist retained", retain_fuer("ok"), True)
+    pr("ok ist ein Urteil des Waechters und nie retained", retain_fuer("ok"), False)
+    pr("ein Zustand der Konfiguration ist retained", retain_fuer("geraete"), True)
     pr("eine Dauer ist nicht retained", retain_fuer("geraet3/alter"), False)
     pr("die Stammbildung trifft zweistellige Nummern",
        thema_stamm("geraet12/stufe"), "geraetN/stufe")
@@ -1454,6 +1673,19 @@ def main():
         f["betriebsdauer"] = betriebsdauer()
         print(json.dumps(f, ensure_ascii=False, indent=1))
         return 0
+
+    # Alles ab hier liest und schreibt in der Anlage. Ohne gelesene Wurzel
+    # und Ordnernamen geschieht NICHTS (Regeln/06: ohne brauchbare Wurzel
+    # warnen statt vollziehen). --selbsttest, --themen und --faehigkeit
+    # oben brauchen keine - der Reiter Test ruft --themen ohne Umgebung.
+    if not pfade()["home"]:
+        sys.stderr.write(
+            "FEHLER: Es wurde keine LoxBerry-Wurzel gelesen oder gefunden "
+            "(LBHOMEDIR, LBPPLUGINDIR, Suche nach config/plugins, data/plugins "
+            "und config/system/general.json oberhalb von %s). Es wurde nichts "
+            "gelesen, geschrieben oder geheilt.\n"
+            % os.path.dirname(os.path.abspath(__file__)))
+        return 1
 
     if "--trocken" in argv:
         print(trockenlauf(config(), historie_lesen(), systemgeraete()))

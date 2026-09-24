@@ -33,7 +33,12 @@ if (!function_exists('lb_wurzel_ermitteln')) {
     {
         $d = __DIR__;
         for ($i = 0; $i < 8; $i++) {
-            if (is_dir($d . '/config/plugins') && is_dir($d . '/webfrontend')) {
+            /* Dritte Bedingung config/system/general.json (Regeln/06):
+             * config/plugins und webfrontend allein traegt auch ein
+             * Pruefstandsrest; bis 1.0.6 legte die Oberflaeche dort an
+             * (Pruefung-Funkwacht-1.0.6, Faelle Q3, Q4). */
+            if (is_dir($d . '/config/plugins') && is_dir($d . '/data/plugins')
+                && is_file($d . '/config/system/general.json')) {
                 return $d;
             }
             $eltern = dirname($d);
@@ -96,11 +101,31 @@ function fw_paths($neu = false)
 {
     static $p = null;
     if ($p !== null && !$neu) { return $p; }
-    $home = getenv('LBHOMEDIR');
-    if (!$home || !is_dir($home)) { $home = lb_wurzel_ermitteln(); }
+    /* Die Wurzel wird GELESEN (Regeln/06): ein gesetztes LBHOMEDIR gilt mit
+     * config/plugins und data/plugins darunter - oder gar nichts; ohne
+     * LBHOMEDIR wird gesucht (lb_wurzel_ermitteln, mit general.json). Bis
+     * 1.0.6 stand nach der Suche ein fester Rueckfall zwei Ebenen ueber
+     * dieser Datei, und fw_log(), fw_token() und fw_config() legten dort an -
+     * aus einem ausgepackten Archiv im Archiv selbst (Fall Q5). Ohne Wurzel
+     * gibt es jetzt KEINE Pfade: jeder Eintrag ist ''. */
+    $home = (string) getenv('LBHOMEDIR');
+    if ($home !== '') {
+        if (!is_dir($home . '/config/plugins') || !is_dir($home . '/data/plugins')) { $home = ''; }
+    } else {
+        $home = lb_wurzel_ermitteln();
+    }
     $dir = getenv('LBPPLUGINDIR');
     if (!$dir) { $dir = basename(dirname(__FILE__)); }
-    $basis = $home !== '' ? $home : dirname(dirname(__DIR__));
+    if ($home === '') {
+        $p = array('home' => '', 'plugin' => $dir);
+        foreach (array('configdir', 'config', 'sicherung', 'datadir', 'stand', 'historie',
+                       'auftraege', 'mqttstand', 'verlauf', 'bestand', 'logdir', 'log',
+                       'dienstlog', 'bindir') as $fw_k) {
+            $p[$fw_k] = '';
+        }
+        return $p;
+    }
+    $basis = $home;
     if ($dir === '' || $dir === '.' || $dir === '/' || $dir === 'html' || $dir === 'plugins') {
         $dir = fw_ordner_bestimmen($basis, $dir);
     }
@@ -918,14 +943,16 @@ function fw_mqtt_themen()
 function fw_mqtt_retain()
 {
     return array(
-        'ok' => 1, 'krank' => 1, 'geraete' => 1, 'geheilt_gesamt' => 1,
-        'versuche_gesamt' => 1, 'alarm' => 1, 'gesperrt' => 1,
+        /* Seit 1.0.6 fluechtig: die Aussagen des Waechters ueber seine
+         * Sticks und sich selbst (Begruendung an RETAIN im Waechter). */
+        'ok' => 0, 'krank' => 0, 'geraete' => 1, 'geheilt_gesamt' => 1,
+        'versuche_gesamt' => 1, 'alarm' => 0, 'gesperrt' => 0,
         'wartung' => 0, 'ts' => 0,
-        'geraetN/ok' => 1, 'geraetN/stufe' => 1, 'geraetN/alter' => 0,
+        'geraetN/ok' => 0, 'geraetN/stufe' => 0, 'geraetN/alter' => 0,
         'geraetN/heilungen' => 1, 'geraetN/versuche' => 1, 'geraetN/abgelehnt' => 1,
         'geraetN/heil24' => 0, 'geraetN/heil7t' => 0, 'geraetN/seit' => 0,
-        'geraetN/letzte' => 1, 'geraetN/neustarts' => 1, 'geraetN/grundnr' => 1,
-        'geraetN/warumnr' => 1, 'geraetN/name' => 1, 'geraetN/grund' => 1,
+        'geraetN/letzte' => 1, 'geraetN/neustarts' => 1, 'geraetN/grundnr' => 0,
+        'geraetN/warumnr' => 0, 'geraetN/name' => 1, 'geraetN/grund' => 0,
         'geraetN/warum' => 0, 'geraetN/letzte_tat' => 1, 'geraetN/bemerkung' => 0,
     );
 }

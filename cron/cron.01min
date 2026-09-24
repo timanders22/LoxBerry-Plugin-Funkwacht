@@ -13,9 +13,16 @@
 DIENST="REPLACELBPBINDIR/dienst.sh"
 case "$DIENST" in
     REPLACE*)
-        SELF=$(cd "$(dirname "$(readlink -f "$0")")" && pwd)
-        BASE=$(cd "$SELF/../.." && pwd)
-        DIENST="$BASE/bin/plugins/funkwacht/dienst.sh"
+        # Nicht vom Installer eingebaut (ausgepacktes Archiv, Pruefordner):
+        # Wurzel und Ordnername werden GELESEN, nie aus dem Ablageort
+        # gerechnet. Ohne beide geschieht nichts (Regeln/06). Bis 1.0.6 fiel
+        # diese Stelle zwei Ebenen hinauf und auf einen festen Ordnernamen
+        # zurueck (Pruefung-Funkwacht-1.0.6, Fall F5).
+        if [ -z "${LBHOMEDIR:-}" ] || [ -z "${LBPPLUGINDIR:-}" ]; then
+            echo "FEHLER: Platzhalter nicht ersetzt, LBHOMEDIR/LBPPLUGINDIR nicht gesetzt - nichts gestartet." >&2
+            exit 1
+        fi
+        DIENST="$LBHOMEDIR/bin/plugins/$LBPPLUGINDIR/dienst.sh"
         ;;
 esac
 [ -x "$DIENST" ] || exit 0
