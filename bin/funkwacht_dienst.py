@@ -48,6 +48,8 @@ Aufrufe:
     funkwacht_dienst.py --faehigkeit  was kann dieses Geraet wirklich?
     funkwacht_dienst.py --trocken     was WUERDE jetzt geschehen? (schaltet nichts)
     funkwacht_dienst.py --heile N[:S] Stick N von Hand heilen, wahlweise Stufe S
+    funkwacht_dienst.py --mqtt-leeren eigene behaltene Themen am Broker loeschen
+                                      (fuer uninstall/uninstall)
 
 Kompatibel mit Python 3.9 und 3.11.
 """
@@ -853,7 +855,9 @@ def felder(stand: dict) -> list:
 # R1-R9); die Altwerte raeumt mqtt_altlast_abraeumen() einmal ab.
 # Retained bleiben Konfiguration (geraete, name) und Verlauf (die Summen,
 # letzte, letzte_tat): sie bleiben wahr, wenn der Waechter stirbt. neustarts
-# zaehlt systemd fuer den fremden Dienst, nicht der Waechter.
+# zaehlt systemd fuer den fremden Dienst, nicht der Waechter. Dass
+# Verlaufszaehler (versuche, abgelehnt, die Summen) retained bleiben duerfen,
+# hat der Hausherr am 24.09.2026 entschieden (Regeln/07 Abschnitt 3, Nachlese).
 RETAIN = {
     "ok": 0, "krank": 0, "geraete": 1, "geheilt_gesamt": 1,
     "versuche_gesamt": 1, "alarm": 0, "gesperrt": 0,
@@ -987,24 +991,106 @@ def mqtt_altlast_abraeumen(praefix, warten=3.0) -> int:
                 return 0
     except OSError:
         pass
+    def gehoert_dazu(thema):
+        return thema_stamm(thema[len(praefix) + 1:]) in RETAIN_ALTLAST
+
+    # Der Weg zum Broker steht seit 1.0.7 in _broker_leeren(): dieselbe
+    # Bauart nehmen die Deinstallation (mqtt_leeren) und das Abraeumen
+    # geloeschter Sticks (stick_themen_abraeumen).
+    erg = _broker_leeren(praefix, gehoert_dazu, warten)
+    if erg["rc"] == 2:
+        log("MQTT: die zurueckbehaltenen Altwerte frueherer Fassungen lassen "
+            "sich nicht abraeumen - %s." % erg["grund"], "retain_altlast")
+        return 2
+    rest, zu_leeren = erg["rest"], erg["geleert"]
+    if rest:
+        log("MQTT: %d von %d zurueckbehaltenen Altwerten stehen noch im Broker "
+            "(zum Beispiel %s) - neuer Versuch spaeter."
+            % (len(rest), len(zu_leeren), rest[0]), "retain_altlast")
+        return 1
+    # ERST JETZT der Merker - nach dem Nachlesen, nicht nach dem Senden.
+    try:
+        os.makedirs(os.path.dirname(merker), exist_ok=True)
+        with open(merker, "w", encoding="utf-8") as f:
+            f.write(soll + "\n")
+    except OSError as e:
+        log("MQTT: der Merker %s liess sich nicht schreiben (%s) - beim naechsten "
+            "Durchgang wird erneut nachgesehen." % (merker, e), "retain_merker")
+    if zu_leeren:
+        log("MQTT: %d zurueckbehaltene Altwerte frueherer Fassungen geloescht und "
+            "nachgelesen (%s)." % (len(zu_leeren), ", ".join(zu_leeren)))
+    return 0
+
+
+# ======================================================================
+# Eigene Themen am Broker loeschen und nachlesen (1.0.7)
+# ======================================================================
+#
+# Bis 1.0.6 raeumte die Funkwacht nur die neun Dienstaussagen einmal ab
+# (oben). Zwei Luecken blieben (Pruefung-Funkwacht-1.0.7, messe_nachlese.sh):
+# * uninstall/uninstall liess jedes retained Thema im Broker stehen -
+#   Einrichtung und Verlauf retained seit 1.0.3 (Faelle U1-U4);
+# * leerte man eine Stick-Zeile, blieben deren retained Themen stehen, und
+#   Loxone las Name und Verlauf eines Sticks, den es nicht mehr gibt
+#   (Faelle S1, S7).
+# Beides geht jetzt direkt an den Broker, loescht nur, was WIRKLICH behalten
+# liegt und der Funkwacht gehoert, und liest nach (Regeln/07 Abschnitt 3).
+
+# geraet<N>/<feld>: N wie die Zeilennummer, ohne fuehrende Null, ein- oder
+# zweistellig (die Oberflaeche fuehrt hoechstens 24 Zeilen, FW_GERAETE_MAX).
+STICK_THEMA = re.compile(r"^geraet([1-9][0-9]?)/([a-z0-9_]+)$")
+RETAIN_STICKS_KENNUNG = "funkwacht-1.0.7-sticks"
+_sticks_naechster = 0.0
+
+
+def eigenes_thema(praefix, thema) -> str:
+    """Der Teil hinter dem Praefix, wenn DIESER Waechter das Thema sendet.
+
+    Eigen ist ein Stamm aus RETAIN (dieselben Staemme seit 1.0.0) - ohne
+    Nummer (ok, geraete, ...) oder als geraet<N>/<feld>. Sonst '': ein
+    fremdes Thema unter demselben Praefix bleibt unberuehrt (Fall U2).
+    """
+    if not praefix or not str(thema).startswith(praefix + "/"):
+        return ""
+    rest = str(thema)[len(praefix) + 1:]
+    if "/" not in rest:
+        return rest if rest in RETAIN else ""
+    m = STICK_THEMA.match(rest)
+    if m and ("geraetN/" + m.group(2)) in RETAIN:
+        return rest
+    return ""
+
+
+def je_retained() -> list:
+    """Die Staemme, die je retained hinausgingen: RETAIN seit 1.0.6 und die
+    neun, die 1.0.3 bis 1.0.5 retained sandten (RETAIN_ALTLAST)."""
+    return sorted({s for s, v in RETAIN.items() if v} | set(RETAIN_ALTLAST))
+
+
+def _broker_leeren(praefix, auswahl, warten=3.0) -> dict:
+    """Behaltene Themen unter <praefix>/ am Broker loeschen und NACHLESEN.
+
+    Geloescht wird nur, was WIRKLICH behalten im Broker liegt - gefunden ueber
+    ein Abonnement - und was auswahl(thema) freigibt; danach ein zweites
+    Abonnement: was dann noch behalten ankommt, ist stehengeblieben. Bis 1.0.6
+    stand dieser Weg nur in mqtt_altlast_abraeumen(); Bauart wie
+    VolkswagenID 0.9.24 und Skoda-Connect-NG 0.9.25.
+
+    Rueckgabe: {"rc": 0 erledigt | 1 es blieb etwas stehen | 2 nicht
+    moeglich, "geleert": [...], "rest": [...], "grund": Text}.
+    """
+    erg = {"rc": 2, "geleert": [], "rest": [], "grund": ""}
     try:
         import paho.mqtt.client as mq
     except ImportError:
-        log("MQTT: paho fehlt (python3-paho-mqtt) - die zurueckbehaltenen "
-            "Altwerte frueherer Fassungen lassen sich nicht abraeumen.",
-            "retain_altlast")
-        return 2
+        erg["grund"] = "paho fehlt (python3-paho-mqtt)"
+        return erg
     import threading
     import fw_mqtt
     zug = fw_mqtt.zugang()
     gesehen = set()
     angemeldet = threading.Event()
     code = {"wert": None}
-
-    def gehoert_dazu(thema):
-        if not thema.startswith(praefix + "/"):
-            return False
-        return thema_stamm(thema[len(praefix) + 1:]) in RETAIN_ALTLAST
 
     def bei_verbindung(_k, _d, _f, rc, *_r):
         try:
@@ -1014,7 +1100,8 @@ def mqtt_altlast_abraeumen(praefix, warten=3.0) -> int:
         angemeldet.set()
 
     def bei_nachricht(_k, _d, n):
-        if n.retain and n.payload and gehoert_dazu(n.topic):
+        if n.retain and n.payload and n.topic.startswith(praefix + "/") \
+                and auswahl(n.topic):
             gesehen.add(n.topic)
 
     # Eine EIGENE Kennung: mit derselben wie der Mithoerer wuerfen sich beide
@@ -1034,17 +1121,14 @@ def mqtt_altlast_abraeumen(praefix, warten=3.0) -> int:
     try:
         k.connect(zug["host"], zug["port"], 30)
     except Exception as e:
-        log("MQTT: Broker %s:%s fuer das Abraeumen nicht erreichbar (%s) - die "
-            "zurueckbehaltenen Altwerte stehen noch im Broker."
-            % (zug["host"], zug["port"], e), "retain_altlast")
-        return 2
+        erg["grund"] = "Broker %s:%s nicht erreichbar (%s)" % (zug["host"], zug["port"], e)
+        return erg
     k.loop_start()
     try:
         if not angemeldet.wait(10) or code["wert"]:
-            log("MQTT: der Broker hat die Anmeldung fuer das Abraeumen nicht "
-                "angenommen (Code %s) - die Altwerte stehen noch im Broker."
-                % code["wert"], "retain_altlast")
-            return 2
+            erg["grund"] = ("der Broker hat die Anmeldung nicht angenommen (Code %s)"
+                            % code["wert"])
+            return erg
         k.subscribe(praefix + "/#")
         time.sleep(warten)
         k.unsubscribe(praefix + "/#")
@@ -1061,20 +1145,68 @@ def mqtt_altlast_abraeumen(praefix, warten=3.0) -> int:
         time.sleep(warten)
         rest = sorted(gesehen)
     except Exception as e:
-        log("MQTT: das Abraeumen der Altwerte scheiterte (%s)." % e, "retain_altlast")
-        return 2
+        erg["grund"] = "das Loeschen scheiterte (%s)" % e
+        return erg
     finally:
         k.loop_stop()
         try:
             k.disconnect()
         except Exception:
             pass
-    if rest:
-        log("MQTT: %d von %d zurueckbehaltenen Altwerten stehen noch im Broker "
+    erg.update(rc=1 if rest else 0, geleert=zu_leeren, rest=rest)
+    return erg
+
+
+def sticks_merker_datei() -> str:
+    d = pfade()["data"]
+    return os.path.join(d, "retain_sticks_geraeumt") if d else ""
+
+
+def stick_themen_abraeumen(praefix, aktiv, warten=3.0) -> int:
+    """Die retained Themen von Sticks, die nicht (mehr) eingerichtet sind,
+    am Broker loeschen. aktiv: die Nummern der Zeilen mit Namen.
+
+    Nachgesehen wird nur, wenn sich Praefix oder Stickmenge seit dem letzten
+    erledigten Mal geaendert haben (Merker mit Kennung, Praefix und Liste);
+    der Merker liegt im Datenordner und faellt mit jedem Upgrade - danach
+    wird einmal nachgesehen. Er entsteht ERST nach dem Nachlesen (Fall S6).
+    Rueckgabe wie mqtt_altlast_abraeumen().
+    """
+    praefix = str(praefix or "").strip("/")
+    if not praefix or "#" in praefix or "+" in praefix:
+        return 2
+    merker = sticks_merker_datei()
+    if not merker:
+        return 2
+    nummern = set()
+    for n in aktiv:
+        try:
+            nummern.add(str(int(n)))
+        except (TypeError, ValueError):
+            continue
+    soll = "%s|%s|%s" % (RETAIN_STICKS_KENNUNG, praefix,
+                         ",".join(sorted(nummern, key=int)))
+    try:
+        with open(merker, "r", encoding="utf-8") as f:
+            if f.read().strip() == soll:
+                return 0
+    except OSError:
+        pass
+
+    def verwaist(thema):
+        m = STICK_THEMA.match(eigenes_thema(praefix, thema))
+        return bool(m) and m.group(1) not in nummern
+
+    erg = _broker_leeren(praefix, verwaist, warten)
+    if erg["rc"] == 2:
+        log("MQTT: die Themen entfernter Sticks lassen sich nicht abraeumen - %s."
+            % erg["grund"], "retain_sticks")
+        return 2
+    if erg["rc"] == 1:
+        log("MQTT: %d von %d Themen entfernter Sticks stehen noch im Broker "
             "(zum Beispiel %s) - neuer Versuch spaeter."
-            % (len(rest), len(zu_leeren), rest[0]), "retain_altlast")
+            % (len(erg["rest"]), len(erg["geleert"]), erg["rest"][0]), "retain_sticks")
         return 1
-    # ERST JETZT der Merker - nach dem Nachlesen, nicht nach dem Senden.
     try:
         os.makedirs(os.path.dirname(merker), exist_ok=True)
         with open(merker, "w", encoding="utf-8") as f:
@@ -1082,10 +1214,101 @@ def mqtt_altlast_abraeumen(praefix, warten=3.0) -> int:
     except OSError as e:
         log("MQTT: der Merker %s liess sich nicht schreiben (%s) - beim naechsten "
             "Durchgang wird erneut nachgesehen." % (merker, e), "retain_merker")
-    if zu_leeren:
-        log("MQTT: %d zurueckbehaltene Altwerte frueherer Fassungen geloescht und "
-            "nachgelesen (%s)." % (len(zu_leeren), ", ".join(zu_leeren)))
+    if erg["geleert"]:
+        log("MQTT: %d zurueckbehaltene Themen entfernter Sticks geloescht und "
+            "nachgelesen (%s)." % (len(erg["geleert"]), ", ".join(erg["geleert"])))
     return 0
+
+
+def _stick_nummern() -> list:
+    """Jede Stick-Nummer, die sich aus Konfiguration und Zustand ermitteln
+    laesst: jede Zeile der Konfiguration (auch leere - sie kann frueher einen
+    Namen getragen haben), dazu die Nummern in historie.json und stand.json."""
+    n = set(range(1, len(config().get("geraete") or []) + 1))
+    for datei in (pfade()["historie"], pfade()["stand"]):
+        d, _ = json_lesen(datei, {})
+        g = d.get("geraete") if isinstance(d, dict) else None
+        if isinstance(g, dict):
+            n |= {int(k) for k in g if re.match(r"^[1-9][0-9]?$", str(k))}
+    return sorted(x for x in n if 1 <= x <= 99)
+
+
+def _udp_leeren(praefix) -> int:
+    """Rueckfall der Deinstallation ohne Broker oder ohne paho: je Thema, das
+    je retained hinausging, ein leeres 'retain' an den UDP-Eingang. UDP
+    bestaetigt nichts, und die Ausgabe sagt es (Regeln/07, "Ein Absender
+    merkt nichts davon")."""
+    g, _ = json_lesen(pfade()["general"], {})
+    m = g.get("Mqtt") or g.get("mqtt") or {}
+    port = int(fw_pruef.zahl(m.get("Udpinport") or m.get("udpinport"), 0))
+    if not port:
+        print("<INFO> MQTT: auch kein UDP-Eingang des Gateways in general.json - die "
+              "behaltenen Themen bleiben stehen und sind im Broker von Hand zu loeschen.")
+        return 2
+    staemme = je_retained()
+    themen = [s for s in staemme if not s.startswith("geraetN/")]
+    for n in _stick_nummern():
+        themen += ["geraet%d/%s" % (n, s[len("geraetN/"):])
+                   for s in staemme if s.startswith("geraetN/")]
+    geschickt = 0
+    try:
+        s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    except OSError as e:
+        print("<INFO> MQTT: kein Socket (%s) - die behaltenen Themen bleiben stehen." % e)
+        return 2
+    try:
+        for t in themen:
+            try:
+                s.sendto(("retain %s/%s " % (praefix, t)).encode("utf-8"),
+                         ("127.0.0.1", port))
+                geschickt += 1
+            except OSError:
+                pass
+            # Der Eingang verwirft in Stoessen (Regeln/07, "Der UDP-Eingang
+            # verliert unter Last Pakete"); ein kurzer Abstand schont ihn.
+            time.sleep(0.01)
+    finally:
+        s.close()
+    print("<INFO> MQTT: Rueckfall ueber den UDP-Eingang %d des Gateways: %d Loeschbefehle "
+          "unter '%s/' geschickt (leere Nutzlast, 'retain')." % (port, geschickt, praefix))
+    print("<INFO> MQTT: UDP bestaetigt nichts. Stehen die Themen danach noch, sind sie im "
+          "Broker von Hand zu loeschen.")
+    return 2
+
+
+def mqtt_leeren(warten=3.0) -> int:
+    """Fuer uninstall/uninstall: alle behaltenen EIGENEN Themen am Broker
+    loeschen und nachlesen - auch die geloeschter Sticks, jede Nummer.
+
+    Unabhaengig von "MQTT ein": die Altwerte koennen aus der Zeit stammen, als
+    es an war (Fall U9). Ausgabe im Format des Installers. Rueckgabe 0
+    geleert oder nichts zu leeren, 1 es blieb etwas stehen, 2 nicht am
+    Broker moeglich (dann der UDP-Rueckfall).
+    """
+    if not pfade()["home"]:
+        print("<INFO> MQTT: keine LoxBerry-Wurzel gelesen - am Broker wurde nichts geloescht.")
+        return 2
+    praefix = str(config().get("mqtt_topic") or "").strip("/")
+    if not praefix or "#" in praefix or "+" in praefix:
+        print("<INFO> MQTT: kein brauchbares Themenpraefix (%r) - am Broker wurde nichts "
+              "geloescht." % praefix)
+        return 2
+    erg = _broker_leeren(praefix, lambda t: bool(eigenes_thema(praefix, t)), warten)
+    if erg["rc"] == 0:
+        if erg["geleert"]:
+            print("<OK> MQTT: %d behaltene Themen unter '%s/' am Broker geloescht und "
+                  "nachgemessen." % (len(erg["geleert"]), praefix))
+        else:
+            print("<INFO> MQTT: unter '%s/' war am Broker nichts von der Funkwacht "
+                  "behalten - nachgemessen, nichts zu loeschen." % praefix)
+        return 0
+    if erg["rc"] == 1:
+        print("<WARNING> MQTT: %d von %d behaltenen Themen unter '%s/' stehen nach dem "
+              "Loeschen noch im Broker, zum Beispiel %s - bitte von Hand loeschen."
+              % (len(erg["rest"]), len(erg["geleert"]), praefix, erg["rest"][0]))
+        return 1
+    print("<INFO> MQTT: am Broker nicht moeglich - %s." % erg["grund"])
+    return _udp_leeren(praefix)
 
 
 # ======================================================================
@@ -1439,7 +1662,7 @@ def melden(cfg, meldungen):
 
 
 def veroeffentlichen(cfg, stand):
-    global _altlast_naechster
+    global _altlast_naechster, _sticks_naechster
     if not cfg.get("mqtt_ein"):
         return
     praefix = cfg["mqtt_topic"].strip("/")
@@ -1453,6 +1676,15 @@ def veroeffentlichen(cfg, stand):
             _altlast_naechster = time.time() + 600
     paare = [(m, w) for m, _, w in felder(stand)]
     mqtt_senden(paare, praefix)
+    # Themen geleerter Stick-Zeilen abraeumen (1.0.7) - NACH dem Senden: das
+    # Nachsehen dauert zweimal die Wartezeit, und die leere Nutzlast der
+    # Altwerte oben soll nur Sekunden vor dem gueltigen Wert stehen
+    # (Rueckschritt Pruefung-Funkwacht-1.0.6, Fall R26: davor waren es > 5 s).
+    # Nachgesehen wird nur, wenn sich die Stickmenge geaendert hat;
+    # gescheitert: in zehn Minuten.
+    if time.time() >= _sticks_naechster:
+        if stick_themen_abraeumen(praefix, (stand.get("geraete") or {}).keys()) != 0:
+            _sticks_naechster = time.time() + 600
 
 
 def beenden(signum, rahmen):
@@ -1619,6 +1851,17 @@ def dienst_selbsttest():
     pr("ein unbekanntes Thema geht als publish", retain_fuer("gibt/es/nicht"), False)
 
     zeilen.append("")
+    zeilen.append("-- Eigene Themen beim Abraeumen --")
+    pr("ein Summenthema ist eigen", eigenes_thema("fw", "fw/geraete"), "geraete")
+    pr("ein Stickthema ist eigen, auch zweistellig",
+       eigenes_thema("fw", "fw/geraet17/name"), "geraet17/name")
+    pr("ein fremdes Feld unter einem Stick ist nicht eigen",
+       eigenes_thema("fw", "fw/geraet1/fremd"), "")
+    pr("Nummer 0 ist nicht eigen", eigenes_thema("fw", "fw/geraet0/name"), "")
+    pr("ein anderes Praefix ist nicht eigen", eigenes_thema("fw", "fwx/geraete"), "")
+    pr("je retained gingen 19 Staemme hinaus", len(je_retained()), 19)
+
+    zeilen.append("")
     zeilen.append("-- Fassung aus einer Quelle --")
     import tempfile
     with tempfile.TemporaryDirectory() as t:
@@ -1673,6 +1916,11 @@ def main():
         f["betriebsdauer"] = betriebsdauer()
         print(json.dumps(f, ensure_ascii=False, indent=1))
         return 0
+
+    if "--mqtt-leeren" in argv:
+        # Fuer uninstall/uninstall (1.0.7). Prueft die Wurzel selbst und
+        # antwortet im Format des Installers.
+        return mqtt_leeren()
 
     # Alles ab hier liest und schreibt in der Anlage. Ohne gelesene Wurzel
     # und Ordnernamen geschieht NICHTS (Regeln/06: ohne brauchbare Wurzel

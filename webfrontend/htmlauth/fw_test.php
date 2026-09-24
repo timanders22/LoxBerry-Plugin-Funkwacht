@@ -49,10 +49,17 @@ function fw_python()
 
 function fw_dienst_datei($name = 'funkwacht_dienst.py')
 {
+    /* Der Rueckfall auf <Archiv>/bin/ nur im ausgepackten Archiv
+     * (webfrontend/htmlauth/fw_test.php); installiert fuehrte er bis 1.0.6
+     * nach webfrontend/htmlauth/bin/ - Fall B13. */
     $p = fw_paths();
-    foreach (array($p['bindir'] . '/' . $name,
-                   dirname(dirname(__DIR__)) . '/bin/' . $name) as $k) {
-        if (is_file($k)) { return $k; }
+    $k = array();
+    if ($p['bindir'] !== '') { $k[] = $p['bindir'] . '/' . $name; }
+    if (basename(__DIR__) === 'htmlauth' && basename(dirname(__DIR__)) === 'webfrontend') {
+        $k[] = dirname(dirname(__DIR__)) . '/bin/' . $name;
+    }
+    foreach ($k as $d) {
+        if (is_file($d)) { return $d; }
     }
     return '';
 }

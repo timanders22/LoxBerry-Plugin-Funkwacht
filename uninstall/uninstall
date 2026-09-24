@@ -140,6 +140,39 @@ for N in dienst:funkwacht_dienst.py mithoerer:fw_mqtt.py; do
     rm -f "$PID"
 done
 
+# Behaltene MQTT-Themen der Funkwacht am Broker loeschen (seit 1.0.7).
+#
+# Erst hier, NACH dem Anhalten von Waechter und Mithoerer: ein noch laufender
+# Waechter schriebe die eben geloeschten Themen im naechsten Takt wieder hin.
+# Bis 1.0.6 blieben sie nach dem Deinstallieren im Broker stehen - Einrichtung
+# und Verlauf gehen seit 1.0.3 retained hinaus (Pruefung-Funkwacht-1.0.7,
+# messe_nachlese.sh, Faelle U1-U4). Regeln/07 Abschnitt 3: die Deinstallation
+# raeumt die retained Themen ab, wo die Linie einen Brokerweg hat.
+#
+# funkwacht_dienst.py --mqtt-leeren meldet sich mit den Zugangsdaten der
+# eigenen Konfiguration bzw. der general.json am Broker an (paho aus
+# dpkg/apt), loescht nur, was die Funkwacht sendet und WIRKLICH behalten
+# liegt - auch Themen geloeschter Sticks -, und liest nach. Nur ohne Broker
+# oder ohne paho geht es ueber den UDP-Eingang des Gateways, und die Ausgabe
+# sagt, dass das nichts bestaetigt. bin/plugins/<ordner> und die
+# Konfiguration sind hier noch da: der Installer loescht sie erst nach
+# diesem Skript (purge_installation; am Geraet nachgesehen 17.09.2026, belegt
+# in LoxBerry-Plugin-Skoda-Connect-NG-0.9.26/uninstall/uninstall). Als
+# loxberry, nicht als root: gebraucht wird nur Lesezugriff.
+FW_PY="$PBIN/funkwacht_dienst.py"
+FW_PYBIN=$(command -v python3 2>/dev/null)
+if [ ! -f "$FW_PY" ]; then
+    echo "<INFO> $FW_PY fehlt - behaltene MQTT-Themen wurden nicht geloescht."
+elif [ -z "$FW_PYBIN" ]; then
+    echo "<INFO> Kein python3 gefunden - behaltene MQTT-Themen wurden nicht geloescht."
+elif [ "$(id -u)" = "0" ] && id loxberry >/dev/null 2>&1; then
+    su -s /bin/bash loxberry -c "$(printf 'LBHOMEDIR=%q LBPPLUGINDIR=%q PYTHONDONTWRITEBYTECODE=1 timeout 60 %q %q --mqtt-leeren' \
+        "$BASE" "$PFOLDER" "$FW_PYBIN" "$FW_PY")" 2>&1 || true
+else
+    LBHOMEDIR="$BASE" LBPPLUGINDIR="$PFOLDER" PYTHONDONTWRITEBYTECODE=1 \
+        timeout 60 "$FW_PYBIN" "$FW_PY" --mqtt-leeren 2>&1 || true
+fi
+
 # Beides liegt NEBEN dem jeweiligen Ordner und ueberlebt deshalb jedes
 # Update - also auch das Deinstallieren, wenn es hier nicht steht.
 rm -f "$BASE/config/plugins/$PFOLDER.backup.json"

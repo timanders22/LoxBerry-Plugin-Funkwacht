@@ -28,13 +28,24 @@ error_reporting(E_ALL & ~E_DEPRECATED & ~E_NOTICE);
 
 /* Die Bibliothek liegt im UNANGEMELDETEN Bereich. Der Weg dorthin sieht im
  * Archiv anders aus als installiert - deshalb eine Kandidatenliste und keine
- * Rechnung. Genau daran ist das Intercom-Plugin mit HTTP 500 gescheitert. */
+ * Rechnung. Genau daran ist das Intercom-Plugin mit HTTP 500 gescheitert.
+ *
+ * Jede der beiden Lagen gilt nur, wenn der EIGENE Ort sie traegt: installiert
+ * webfrontend/htmlauth/plugins/<ordner>/ -> webfrontend/html/plugins/<ordner>/,
+ * im Archiv webfrontend/htmlauth/ -> webfrontend/html/. Bis 1.0.6 standen drei
+ * Wege nacheinander, jeder in jeder Lage: im Archiv kamen die beiden
+ * installierten zuerst und luden eine fremde fw_lib.php aus
+ * <ueber dem Archiv>/html/plugins/htmlauth/, installiert ohne eigene
+ * Bibliothek die eines Plugins mit dem Ordner "html"
+ * (Pruefung-Funkwacht-1.0.7, messe_nachlese.sh, Faelle B1-B4). */
 $fw_gefunden = false;
-foreach (array(
-    dirname(dirname(__DIR__)) . '/html/plugins/' . basename(__DIR__) . '/fw_lib.php',
-    dirname(dirname(dirname(__DIR__))) . '/html/plugins/' . basename(__DIR__) . '/fw_lib.php',
-    dirname(__DIR__) . '/html/fw_lib.php',
-) as $fw_kandidat) {
+$fw_kandidaten = array();
+if (basename(dirname(__DIR__)) === 'plugins' && basename(dirname(dirname(__DIR__))) === 'htmlauth') {
+    $fw_kandidaten[] = dirname(dirname(dirname(__DIR__))) . '/html/plugins/' . basename(__DIR__) . '/fw_lib.php';
+} elseif (basename(__DIR__) === 'htmlauth' && basename(dirname(__DIR__)) === 'webfrontend') {
+    $fw_kandidaten[] = dirname(__DIR__) . '/html/fw_lib.php';
+}
+foreach ($fw_kandidaten as $fw_kandidat) {
     if (is_file($fw_kandidat)) { require_once $fw_kandidat; $fw_gefunden = true; break; }
 }
 if (!$fw_gefunden) {

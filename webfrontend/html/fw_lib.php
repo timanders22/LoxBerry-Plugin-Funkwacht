@@ -763,12 +763,27 @@ function fw_dienst_pid($datei = 'dienst.pid', $prozess = 'funkwacht_dienst.py')
 
 function fw_mithoerer_pid() { return fw_dienst_pid('mithoerer.pid', 'fw_mqtt.py'); }
 
+/**
+ * Liegt diese Datei im ausgepackten Archiv (webfrontend/html/fw_lib.php)?
+ * Nur dann gilt der Rueckfall auf die Nachbarn des Archivs (bin/,
+ * templates/lang). Installiert liegt sie in webfrontend/html/plugins/<ordner>/;
+ * dort fuehrte derselbe Rueckfall bis 1.0.6 nach webfrontend/html/bin/ bzw.
+ * in templates/plugins/funkwacht/ - fremde Baeume (Pruefung-Funkwacht-1.0.7,
+ * messe_nachlese.sh, Faelle B7, B8, B10, B12).
+ */
+function fw_archivlage()
+{
+    return basename(__DIR__) === 'html' && basename(dirname(__DIR__)) === 'webfrontend';
+}
+
 function fw_dienst_skript()
 {
     $p = fw_paths();
-    foreach (array($p['bindir'] . '/dienst.sh',
-                   dirname(dirname(__DIR__)) . '/bin/dienst.sh') as $k) {
-        if (is_file($k)) { return $k; }
+    $k = array();
+    if ($p['bindir'] !== '') { $k[] = $p['bindir'] . '/dienst.sh'; }
+    if (fw_archivlage()) { $k[] = dirname(dirname(__DIR__)) . '/bin/dienst.sh'; }
+    foreach ($k as $d) {
+        if (is_file($d)) { return $d; }
     }
     return '';
 }
@@ -804,8 +819,10 @@ function fw_bin_aufruf($datei, $argumente = array(), $zeit = 60)
 {
     $p = fw_paths();
     $ziel = '';
-    foreach (array($p['bindir'] . '/' . $datei,
-                   dirname(dirname(__DIR__)) . '/bin/' . $datei) as $k) {
+    $kand = array();
+    if ($p['bindir'] !== '') { $kand[] = $p['bindir'] . '/' . $datei; }
+    if (fw_archivlage()) { $kand[] = dirname(dirname(__DIR__)) . '/bin/' . $datei; }
+    foreach ($kand as $k) {
         if (is_file($k)) { $ziel = $k; break; }
     }
     if ($ziel === '') { return array(127, ''); }
@@ -1352,12 +1369,14 @@ function fw_langdir()
     if ($gefunden !== null) { return $gefunden; }
     $p = fw_paths();
     $k = array();
+    /* Kein fester Ordnername und kein Weg ueber das Archiv hinaus: bis 1.0.6
+     * standen hier templates/plugins/funkwacht/lang (Sprachdateien eines
+     * gleichnamigen FREMDEN Plugins, wenn diese Installation funkwacht01
+     * heisst) und <ueber dem Archiv>/templates/lang (Faelle B7, B8). */
     if ($p['home'] !== '') {
         $k[] = $p['home'] . '/templates/plugins/' . $p['plugin'] . '/lang';
-        $k[] = $p['home'] . '/templates/plugins/funkwacht/lang';
     }
-    $k[] = dirname(dirname(__DIR__)) . '/templates/lang';
-    $k[] = dirname(dirname(dirname(__DIR__))) . '/templates/lang';
+    if (fw_archivlage()) { $k[] = dirname(dirname(__DIR__)) . '/templates/lang'; }
     foreach ($k as $d) {
         if (is_file($d . '/language_de.ini') || is_file($d . '/language_en.ini')) {
             $gefunden = $d;

@@ -4,10 +4,42 @@
 Merkt, wenn ein Stick verstummt, weckt ihn in Stufen wieder auf — und misst
 nach, ob es geholfen hat.
 
-Version 1.0.6 · LoxBerry ab 3.0 · PHP 7.4 und 8.x · Python 3 mit paho-mqtt
+Version 1.0.7 · LoxBerry ab 3.0 · PHP 7.4 und 8.x · Python 3 mit paho-mqtt
 (Debian-Paket, über `dpkg/apt`)
 
 ---
+
+## Neu in 1.0.7
+
+**Die Deinstallation räumt den Broker ab.** Bis 1.0.6 blieben nach dem
+Deinstallieren alle zurückbehaltenen Themen der Funkwacht im Broker stehen —
+Zahl und Namen der Sticks, die Summen, die letzte Heilung —, und Loxone las sie
+nach jedem Neustart von Broker oder Gateway weiter. Jetzt meldet sich die
+Deinstallation mit denselben Zugangsdaten wie der Mithörer am Broker an,
+löscht jedes behaltene Thema der Funkwacht unter dem eingestellten Präfix —
+auch die gelöschter Sticks, gleich welche Nummer — und liest danach nach, ob
+wirklich nichts mehr steht. Fremde Themen unter demselben Präfix bleiben
+unberührt. Ist der Broker nicht erreichbar oder fehlt paho, gehen die
+Löschbefehle über den UDP-Eingang des Gateways; das bestätigt nichts, und die
+Deinstallation sagt es. Themen unter einem **früher** eingestellten Präfix
+kennt sie nicht; die sind im Broker von Hand zu löschen.
+
+**Eine geleerte Stick-Zeile hinterlässt keine Themen mehr.** Bisher standen
+Name, Heilungen und letzte Heilung eines entfernten Sticks weiter
+zurückbehalten im Broker. Ändert sich die Menge der eingerichteten Sticks,
+löscht der Wächter im nächsten Durchgang die zurückbehaltenen Themen der
+Nummern, die nicht mehr eingerichtet sind, direkt am Broker, und merkt es sich
+erst, wenn das Nachlesen nichts mehr findet. Das geschieht nur bei
+eingeschaltetem MQTT und laufendem Wächter.
+
+**Die Oberfläche lädt nur ihre eigene Bibliothek.** Die Suchliste für
+`fw_lib.php` in der Oberfläche und in der Live-Abfrage probierte bis 1.0.6 drei
+Wege in jeder Lage; aus einem ausgepackten Archiv konnte sie so eine fremde
+Bibliothek laden, installiert ohne eigene Bibliothek die eines anderen Plugins.
+Jetzt gilt der Weg der installierten Lage nur installiert und der des Archivs
+nur im Archiv. Dasselbe für die Sprachdateien (kein Rückfall mehr auf den
+festen Ordner `funkwacht`, wenn diese Installation anders heißt) und für
+`dienst.sh` und die Python-Werkzeuge, die die Oberfläche aufruft.
 
 ## Neu in 1.0.6
 
@@ -381,8 +413,9 @@ sein Schaden.
 
 * Reiter *Test*, Knopf **Selbstprüfung** — neunzehn Fragen mit Haken, Kreuz
   oder „hier lässt sich nichts messen".
-* `python3 bin/funkwacht_dienst.py --selbsttest` — 116 Fälle: Rechenkern,
-  Retain je Thema, Fassungsquelle; ohne Netz und ohne Geräte.
+* `python3 bin/funkwacht_dienst.py --selbsttest` — 122 Fälle: Rechenkern,
+  Retain je Thema, eigene Themen beim Abräumen, Fassungsquelle; ohne Netz
+  und ohne Geräte.
 * `python3 bin/funkwacht_dienst.py --themen` — jedes gesendete Thema mit
   seinem Retain-Wert.
 * `python3 bin/fw_mqtt.py --selbsttest` — 29 Fälle: Themenvergleich,
@@ -405,7 +438,8 @@ cron/           Minutentakt — startet die Dienste, falls sie stehen
 dpkg/apt        uhubctl und python3-paho-mqtt (installiert LoxBerry als root)
 templates/      Sprachdateien und Hilfe
 webfrontend/    html = Endpunkt für den Miniserver, htmlauth = Oberfläche
-uninstall/      räumt die Sicherungen neben den Ordnern weg
+uninstall/      räumt die Sicherungen neben den Ordnern und die behaltenen
+                MQTT-Themen weg
 ```
 
 Die Sprachdateien werden aus einer Quelle erzeugt:
