@@ -120,7 +120,7 @@ function fw_paths($neu = false)
         $p = array('home' => '', 'plugin' => $dir);
         foreach (array('configdir', 'config', 'sicherung', 'datadir', 'stand', 'historie',
                        'auftraege', 'mqttstand', 'verlauf', 'bestand', 'logdir', 'log',
-                       'dienstlog', 'bindir') as $fw_k) {
+                       'dienstlog', 'bindir', 'altpraefix', 'einmal') as $fw_k) {
             $p[$fw_k] = '';
         }
         return $p;
@@ -140,6 +140,10 @@ function fw_paths($neu = false)
         'historie'  => $basis . '/data/plugins/' . $dir . '/historie.json',
         'auftraege' => $basis . '/data/plugins/' . $dir . '/auftraege.json',
         'mqttstand' => $basis . '/data/plugins/' . $dir . '/mqtt_stand.json',
+        /* M5: Praefixe, unter denen der Waechter einmal abraeumen soll. */
+        'altpraefix' => $basis . '/data/plugins/' . $dir . '/mqtt_altpraefix.json',
+        /* U8: das Ergebnis eines POST fuer den folgenden GET (0600). */
+        'einmal'    => $basis . '/data/plugins/' . $dir . '/einmalmeldung.json',
         'verlauf'   => $basis . '/data/plugins/' . $dir . '/verlauf',
         /* NEBEN dem Datenordner - der Installer loescht data/plugins/<x>/
          * bei jedem Update, den Nachbarn mit dem Punkt trifft er nicht. */
@@ -253,10 +257,18 @@ function fw_vorlagen()
         ),
         'z2m_mqtt' => array(
             'text' => 'VORL.Z2M_MQTT',
-            'werte' => array('art' => 'mqtt', 'thema' => 'zigbee2mqtt/bridge/state',
-                             'art2' => 'usb', 'pfad2' => '', 'verkn' => 'oder',
+            /* M2 (Pruefung 29.09.2026): bridge/state ist retained und kommt
+             * nur bei einer Aenderung - als Lebenszeichen taugt es nicht.
+             * bridge/health sendet Zigbee2MQTT 2.x im Takt von health.interval
+             * (Vorgabe 10 Minuten, am Geraet gemessen); 1500 s lassen zwei
+             * Takte Luft.
+             * S3 (Pruefung 29.09.2026): kein zweites Kriterium. Bis Stufe 1
+             * stand hier art2 'usb' mit leerem pfad2 - eine Zeile, die das
+             * Formular beanstandet und die das Zurueckspielen abweist. */
+            'werte' => array('art' => 'mqtt', 'thema' => 'zigbee2mqtt/bridge/health',
+                             'art2' => '', 'pfad2' => '', 'verkn' => 'oder',
                              'dienst' => 'zigbee2mqtt',
-                             'hoechstalter' => 900, 'hoechststufe' => 2),
+                             'hoechstalter' => 1500, 'hoechststufe' => 2),
         ),
         'z2m_docker' => array(
             'text' => 'VORL.Z2M_DOCKER',
@@ -333,9 +345,20 @@ function fw_json_schreiben($pfad, $daten, $rechte = null)
     $fh = @fopen($tmp, 'c');
     if ($fh === false) { return false; }
     if ($rechte !== null) { @chmod($tmp, $rechte); }
-    $ok = ftruncate($fh, 0) && fwrite($fh, $json) !== false;
-    fflush($fh);
-    fclose($fh);
+    /* Geschrieben ist erst, was GANZ geschrieben ist (U1, Pruefung
+     * 29.09.2026, Befund code 5): fwrite() liefert bei voller Karte eine
+     * kleinere Zahl, nicht false - in WSL gemessen 8192 von 19143 Byte,
+     * Rueckgabe true, und rename() machte die gekuerzte Datei zur
+     * Konfiguration. Deshalb: Laenge vergleichen, fflush und fclose pruefen,
+     * die Nebendatei zuruecklesen und vergleichen, erst dann umbenennen. */
+    $n = ftruncate($fh, 0) ? @fwrite($fh, $json) : false;
+    $ok = ($n === strlen($json));
+    $ok = @fflush($fh) && $ok;
+    $ok = @fclose($fh) && $ok;
+    if ($ok) {
+        clearstatcache(true, $tmp);
+        $ok = (@file_get_contents($tmp) === $json);
+    }
     if (!$ok) { @unlink($tmp); return false; }
     if (!@rename($tmp, $pfad)) { @unlink($tmp); return false; }
     return true;
@@ -393,8 +416,12 @@ function fw_config($erzeugen = true)
             $roh = $sicher;
             if ($erzeugen) {
                 if (!is_dir($p['configdir'])) { @mkdir($p['configdir'], 0775, true); }
-                fw_json_schreiben($p['config'], $roh, 0600);
-                fw_log('Konfiguration aus der Zweitschrift wiederhergestellt.');
+                if (fw_json_schreiben($p['config'], $roh, 0600)) {
+                    fw_log('Konfiguration aus der Zweitschrift wiederhergestellt.');
+                } else {
+                    fw_log('Die Konfiguration liess sich aus der Zweitschrift nicht wiederherstellen '
+                         . '(Schreiben gescheitert); gelesen wird vorerst die Zweitschrift.');
+                }
             }
         }
     }
@@ -452,7 +479,9 @@ function fw_config_speichern($cfg)
              . 'Die Zweitschrift bleibt unangetastet.');
         return false;
     }
-    fw_json_schreiben($p['sicherung'], $zurueck, 0600);
+    if (!fw_json_schreiben($p['sicherung'], $zurueck, 0600)) {
+        fw_log('Die Zweitschrift liess sich nicht erneuern; die Konfiguration selbst ist geschrieben.');
+    }
     return true;
 }
 
@@ -795,7 +824,7 @@ function fw_dienst_skript()
 function fw_dienst_schalten($was)
 {
     if (!in_array($was, array('start', 'stop', 'restart'), true)) {
-        return array(0, 'unbekannt');
+        return array(0, fw_t('DIENST.UNBEKANNT'));
     }
     $s = fw_dienst_skript();
     if ($s === '') { return array(0, fw_t('DIENST.KEIN_SKRIPT')); }
@@ -806,7 +835,7 @@ function fw_dienst_schalten($was)
     $pid = fw_dienst_pid();
     $ok = ($was !== 'stop') ? ($pid > 0) : ($pid === 0);
     $text = implode("\n", $aus);
-    return array($ok ? 1 : 0, $text === '' ? ('Rueckgabewert ' . (int) $rc) : $text);
+    return array($ok ? 1 : 0, $text === '' ? sprintf(fw_t('DIENST.RUECKGABE'), (int) $rc) : $text);
 }
 
 function fw_faehigkeiten()
@@ -855,14 +884,27 @@ function fw_http_holen($url, $timeout = 8)
     $ctx = stream_context_create(array('http' => array(
         'timeout' => (int) $timeout, 'ignore_errors' => true,
         'follow_location' => 0, 'max_redirects' => 1)));
+    /* U2 (Pruefung 29.09.2026): die Kopfzeilen kommen seit dieser Fassung
+     * aus stream_get_meta_data() - Bauart eb_http_abruf() der Einspeisebremse
+     * 0.9.28. Die alte, im Geltungsbereich entstehende Kopfzeilen-Variable
+     * meldet PHP 8.5 schon beim Uebersetzen als ueberholt, PHP 9 soll sie
+     * abschaffen - dann hiesse jeder Code 0. Die Ersatzfunktion gibt es unter
+     * 7.4 nicht; wrapper_data gibt es in allen drei Fassungen. */
     set_error_handler(function () { return true; });
-    $text = file_get_contents($url, false, $ctx);
+    $fp = fopen($url, 'r', false, $ctx);
+    $text = false;
+    $meta = null;
+    if ($fp !== false) {
+        $meta = stream_get_meta_data($fp);
+        $text = stream_get_contents($fp);
+        fclose($fp);
+    }
     restore_error_handler();
     $code = 0;
-    /* $http_response_header entsteht im Geltungsbereich DIESER Funktion. */
-    if (isset($http_response_header[0]) &&
-        preg_match('#\s(\d{3})\s#', $http_response_header[0], $m)) {
-        $code = (int) $m[1];
+    $kopf = (is_array($meta) && isset($meta['wrapper_data']) && is_array($meta['wrapper_data']))
+        ? $meta['wrapper_data'] : array();
+    foreach ($kopf as $z) {
+        if (is_string($z) && preg_match('#^HTTP/\S+\s+([0-9]{3})#', $z, $m)) { $code = (int) $m[1]; }
     }
     return array($text, $code);
 }
@@ -1285,6 +1327,394 @@ function fw_felder_kongruent()
 }
 
 /* ==================================================================
+ * Pruefstellen - EINE fuer Formular und Zurueckspielen
+ *
+ * Seit der Pruefung vom 29.09.2026 (U3, U6, D5) pruefen das Formular und
+ * das Zurueckspielen einer Sicherung mit DENSELBEN Funktionen. Bis 1.0.8
+ * nahm das Zurueckspielen fremde Schluessel, Felder statt Texten und ein
+ * Aktionstoken "Array" an; eine Sicherung mit geraete als Zuordnung legte
+ * Oberflaeche und Endpunkt still (TypeError in fw_config()).
+ * ================================================================== */
+
+/* D5: Einheiten, die das Plugin nie neu startet - DIESELBE Liste wie
+ * EINHEIT_TABU in bin/fw_pruef.py. Ein Eintrag mit * am Ende gilt als
+ * Anfang des Namens. Die sudo-Regel "systemctl restart *" erlaubt jede
+ * Einheit; die Einschraenkung leistet das Plugin, nicht sudo. */
+define('FW_EINHEIT_TABU', array('reboot', 'poweroff', 'halt', 'shutdown', 'kexec',
+    'rescue', 'emergency', 'ssh', 'sshd', 'apache2', 'cron', 'systemd-*', 'dbus',
+    'mosquitto', 'lbdefaults', 'loxberry*'));
+
+/** Die Zahlenfelder je Stick: Formularfeld, von, bis. */
+function fw_geraet_zahlen()
+{
+    return array(
+        'hoechstalter' => array('g_alter', 10, 86400),
+        'hoechststufe' => array('g_stufe', 0, 3),
+        'ruhe_s'       => array('g_ruhe', 10, 3600),
+        'abstand_s'    => array('g_abstand', 30, 86400),
+        'je_tag'       => array('g_tag', 0, 50),
+        'port'         => array('g_port', 0, 99),
+    );
+}
+
+/** Die Zahlenfelder des Betriebs: Formularfeld, von, bis. */
+function fw_betrieb_zahlen()
+{
+    return array(
+        'takt'         => array('takt', 15, 3600),
+        'anlauf_s'     => array('anlauf_s', 0, 3600),
+        'log_kb'       => array('log_kb', 16, 20000),
+        'verlauf_tage' => array('verlauf_tage', 1, 730),
+    );
+}
+
+/**
+ * Eine GANZE Zahl pruefen. Rueckgabe: array(Wert oder null, Grund).
+ * Grund: '' | 'keine_zahl' | 'keine_ganzzahl' | 'ausserhalb'.
+ * Es wird nichts gerundet (U6; bis 1.0.8 wurde 60.4 still zu 60).
+ */
+function fw_ganzzahl_pruefen($roh, $von, $bis)
+{
+    if (is_int($roh)) {
+        $w = $roh;
+    } elseif (is_string($roh) && preg_match('/^\s*-?[0-9]{1,9}\s*$/', $roh)) {
+        $w = (int) trim($roh);
+    } elseif (is_float($roh) || (is_string($roh) && is_numeric(trim($roh)))) {
+        return array(null, 'keine_ganzzahl');
+    } else {
+        return array(null, 'keine_zahl');
+    }
+    if ($w < $von || $w > $bis) { return array(null, 'ausserhalb'); }
+    return array($w, '');
+}
+
+/** Traegt der Text ein Steuerzeichen? Kennwoerter werden nie veraendert (U7). */
+function fw_steuerzeichen($s)
+{
+    return preg_match('/[\x00-\x1F\x7F]/', (string) $s) === 1;
+}
+
+/**
+ * Einen systemd-Einheitennamen pruefen (D5). Rueckgabe: '' oder ein Kuerzel
+ * des Grundes ('leer', 'zeichen', 'strich', 'endung', 'tabu:<eintrag>').
+ * Erlaubt: [A-Za-z0-9@._-], kein fuehrendes -, Endung .service oder keine
+ * (dann haengt der Waechter .service an). Dieselbe Rechnung wie
+ * einheit_pruefen() in bin/fw_pruef.py.
+ */
+function fw_einheit_pruefen($e)
+{
+    if (!is_string($e) || $e === '') { return 'leer'; }
+    if (!preg_match('/^[A-Za-z0-9@._\-]+$/', $e)) { return 'zeichen'; }
+    if ($e[0] === '-') { return 'strich'; }
+    $basis = $e;
+    if (substr($basis, -8) === '.service') {
+        $basis = substr($basis, 0, -8);
+    } elseif (preg_match('/\.(target|socket|mount|automount|swap|path|timer|slice|scope|device)$/', $basis)) {
+        return 'endung';
+    }
+    if ($basis === '') { return 'leer'; }
+    $at = strpos($basis, '@');
+    $vorn = strtolower($at === false ? $basis : substr($basis, 0, $at));
+    foreach (FW_EINHEIT_TABU as $t) {
+        $treffer = substr($t, -1) === '*'
+            ? strpos($vorn, substr($t, 0, -1)) === 0
+            : $vorn === $t;
+        if ($treffer) { return 'tabu:' . $t; }
+    }
+    return '';
+}
+
+/** Das Kuerzel aus fw_einheit_pruefen() als Satz. */
+function fw_einheit_grund($kuerzel)
+{
+    if (strpos($kuerzel, 'tabu:') === 0) {
+        return sprintf(fw_t('EINHEIT.TABU'), substr($kuerzel, 5));
+    }
+    return fw_t('EINHEIT.' . strtoupper($kuerzel));
+}
+
+/** Einen Containernamen pruefen (D5). Rueckgabe: '' oder 'zeichen'. */
+function fw_container_pruefen($c)
+{
+    return (is_string($c) && preg_match('/^[A-Za-z0-9][A-Za-z0-9_.\-]*$/', $c)) ? '' : 'zeichen';
+}
+
+/**
+ * Hat das Aktionstoken die Form, die fw_token_erzeugen() erzeugt?
+ * 24 Zeichen aus abcdefghijkmnpqrstuvwxyz23456789 (ohne l, o, 0, 1) - seit
+ * 1.0.0 unveraendert (in 1.0.0, 1.0.4 und 1.0.7 nachgelesen).
+ */
+function fw_token_gueltig($t)
+{
+    return is_string($t) && preg_match('/^[a-km-np-z2-9]{24}\z/', $t) === 1;
+}
+
+/**
+ * Die Zusammenhaenge einer Stick-Zeile - das, was das Formular beim
+ * Speichern beanstandet. $g traegt schon die richtigen Typen. Rueckgabe:
+ * Liste der Beanstandungen, leer heisst gueltig.
+ */
+function fw_geraet_pruefen($g, $nr)
+{
+    $f = array();
+    /* D5: auch in einer Zeile ohne Namen - der Name kann spaeter kommen. */
+    if ($g['dienst'] !== '') {
+        $grund = fw_einheit_pruefen($g['dienst']);
+        if ($grund !== '') {
+            $f[] = sprintf(fw_t('FEHLER.EINHEIT'), $nr, $g['dienst'], fw_einheit_grund($grund));
+        }
+    }
+    if ($g['container'] !== '' && fw_container_pruefen($g['container']) !== '') {
+        $f[] = sprintf(fw_t('FEHLER.CONTAINER'), $nr, $g['container']);
+    }
+    $leer = ($g['name'] === '' && $g['pfad'] === '' && $g['thema'] === '');
+    if ($leer) { return $f; }
+    if ($g['name'] === '') {
+        $f[] = sprintf(fw_t('FEHLER.NAME_FEHLT'), $nr);
+    }
+    foreach (array(array($g['art'], $g['pfad'], $g['thema'], ''),
+                   array($g['art2'], $g['pfad2'], $g['thema2'], '2')) as $k) {
+        if ($k[0] === '') { continue; }
+        if ($k[0] === 'mqtt' && $k[2] === '') {
+            $f[] = sprintf(fw_t('FEHLER.THEMA_FEHLT'), $nr);
+        }
+        if ($k[0] !== 'mqtt' && $k[1] === ''
+            && !in_array($k[0], array('dienst', 'docker'), true)) {
+            $f[] = sprintf(fw_t('FEHLER.PFAD_FEHLT'), $nr);
+        }
+    }
+    if ($g['art'] === 'dienst' && $g['pfad'] === '' && $g['dienst'] === '') {
+        $f[] = sprintf(fw_t('FEHLER.DIENST_FEHLT'), $nr);
+    }
+    if ($g['art'] === 'docker' && $g['pfad'] === '' && $g['container'] === '') {
+        $f[] = sprintf(fw_t('FEHLER.CONTAINER_FEHLT'), $nr);
+    }
+    if ($g['kennung'] !== '' && !preg_match('/^[0-9a-f]{4}:[0-9a-f]{4}$/', $g['kennung'])) {
+        $f[] = sprintf(fw_t('FEHLER.KENNUNG'), $nr, $g['kennung']);
+    }
+    /* Heilen ohne einen einzigen Hebel ist ein eingeschalteter
+     * Schalter, der nichts tut. Lieber jetzt sagen. */
+    if ($g['heilen'] && $g['hoechststufe'] > 0
+        && $g['dienst'] === '' && $g['container'] === ''
+        && $g['usb_pfad'] === '' && $g['hub'] === '') {
+        $f[] = sprintf(fw_t('FEHLER.KEIN_HEBEL'), $nr);
+    }
+    if ($g['hoechststufe'] >= 3 && ($g['hub'] === '' || $g['port'] <= 0)) {
+        $f[] = sprintf(fw_t('FEHLER.UHUBCTL_UNVOLLSTAENDIG'), $nr);
+    }
+    /* Die Erholungszeit laenger als der Mindestabstand hiesse: der
+     * Stick gilt bis zum naechsten erlaubten Versuch als gesund und
+     * es wird nie wieder geheilt. Melden, nicht zurechtbiegen. */
+    if ($g['ruhe_s'] >= $g['abstand_s']) {
+        $f[] = sprintf(fw_t('FEHLER.RUHE_ZU_LANG'), $nr, $g['ruhe_s'], $g['abstand_s']);
+    }
+    return $f;
+}
+
+/** Ein Grund aus fw_ganzzahl_pruefen() als Satz einer Beanstandung. */
+function fw_sich_zahlgrund($wo, $grund, $von, $bis)
+{
+    if ($grund === 'ausserhalb') { return sprintf(fw_t('SICH.W_BEREICH'), $wo, $von, $bis); }
+    return sprintf(fw_t('SICH.W_ZAHL'), $wo);
+}
+
+/** Ein Text, wie ihn das Formular annimmt: kein Steuer- oder Anfuehrungszeichen, kein Rand. */
+function fw_sich_text_taugt($v)
+{
+    return is_string($v) && !preg_match('/[\x00-\x1F\x7F"\']/', $v) && $v === trim($v);
+}
+
+/**
+ * Eine Stick-Zeile aus einer Sicherung: Typ, Grenzen, Auswahllisten, Muster -
+ * und danach dieselben Zusammenhaenge wie das Formular (fw_geraet_pruefen).
+ * Nichts wird zurechtgebogen: was nicht passt, wird beanstandet.
+ * Rueckgabe: Liste der Beanstandungen, leer heisst gueltig.
+ */
+function fw_geraet_zeile_pruefen($roh, $nr)
+{
+    if (!is_array($roh) || ($roh !== array() && array_values($roh) === $roh)) {
+        return array(sprintf(fw_t('SICH.ZEILE_KAPUTT'), $nr));
+    }
+    $f = array();
+    $vorgabe = fw_geraet_vorgabe();
+    $zahlen = fw_geraet_zahlen();
+    $haken = array('aktiv', 'heilen', 'wachstum', 'dienst_nach', 'lernen');
+    $auswahl = array('art' => array_keys(fw_arten()), 'art2' => array_keys(fw_arten2()),
+                     'verkn' => array('und', 'oder'),
+                     'reihenfolge' => array('normal', 'usb_zuerst'));
+    $g = $vorgabe;
+    foreach ($roh as $k => $v) {
+        $k = (string) $k;
+        $wo = sprintf(fw_t('SICH.ZEILE_FELD'), $nr, $k);
+        if (!array_key_exists($k, $vorgabe)) {
+            $f[] = sprintf(fw_t('SICH.FREMD'), $wo);
+        } elseif (isset($zahlen[$k])) {
+            list($w, $grund) = fw_ganzzahl_pruefen($v, $zahlen[$k][1], $zahlen[$k][2]);
+            if ($grund !== '') {
+                $f[] = fw_sich_zahlgrund($wo, $grund, $zahlen[$k][1], $zahlen[$k][2]);
+            } else {
+                $g[$k] = $w;
+            }
+        } elseif (in_array($k, $haken, true)) {
+            if (!in_array($v, array(0, 1, true, false), true)) {
+                $f[] = sprintf(fw_t('SICH.W_HAKEN'), $wo);
+            } else {
+                $g[$k] = $v ? 1 : 0;
+            }
+        } elseif (isset($auswahl[$k])) {
+            if (!is_string($v) || !in_array($v, $auswahl[$k], true)) {
+                $f[] = sprintf(fw_t('SICH.W_AUSWAHL'), $wo, implode(', ', $auswahl[$k]));
+            } else {
+                $g[$k] = $v;
+            }
+        } elseif (!is_string($v)) {
+            $f[] = sprintf(fw_t('SICH.W_TEXT'), $wo);
+        } elseif (!fw_sich_text_taugt($v)) {
+            $f[] = sprintf(fw_t('SICH.W_ZEICHEN'), $wo);
+        } else {
+            $g[$k] = $v;
+        }
+    }
+    $fehlt = array();
+    foreach (array_keys($vorgabe) as $k) {
+        if (!array_key_exists($k, $roh)) { $fehlt[] = $k; }
+    }
+    if ($fehlt) {
+        $f[] = sprintf(fw_t('SICH.ZEILE_FEHLT'), $nr, implode(', ', $fehlt));
+    }
+    if ($f) { return $f; }
+    return fw_geraet_pruefen($g, $nr);
+}
+
+/**
+ * Einen Schluessel der Sicherung pruefen - dieselben Grenzen, Muster und
+ * Auswahllisten wie das Formular. Rueckgabe: Liste der Beanstandungen.
+ */
+function fw_einstellung_pruefen($k, $w)
+{
+    $wo = sprintf(fw_t('SICH.SCHLUESSEL'), $k);
+    $zahlen = fw_betrieb_zahlen();
+    if ($k === 'geraete') {
+        /* Eine LISTE von Zeilen, keine Zuordnung mit Schluesseln: aus
+         * {"a": {...}} wurde bis 1.0.8 ein TypeError in fw_config(). */
+        if (!is_array($w) || ($w !== array() && array_values($w) !== $w)) {
+            return array(sprintf(fw_t('SICH.W_LISTE'), $wo));
+        }
+        if (count($w) > FW_GERAETE_MAX) {
+            return array(sprintf(fw_t('SICH.W_ZU_VIELE'), $wo, FW_GERAETE_MAX));
+        }
+        $f = array();
+        foreach ($w as $i => $z) {
+            $f = array_merge($f, fw_geraet_zeile_pruefen($z, $i + 1));
+        }
+        return $f;
+    }
+    if ($k === 'zeilen' || isset($zahlen[$k])) {
+        $von = $k === 'zeilen' ? 1 : $zahlen[$k][1];
+        $bis = $k === 'zeilen' ? FW_GERAETE_MAX : $zahlen[$k][2];
+        list(, $grund) = fw_ganzzahl_pruefen($w, $von, $bis);
+        return $grund === '' ? array() : array(fw_sich_zahlgrund($wo, $grund, $von, $bis));
+    }
+    if (in_array($k, array('mqtt_ein', 'global_aus', 'melden_aktiv', 'signal_ein'), true)) {
+        return in_array($w, array(0, 1, true, false), true)
+            ? array() : array(sprintf(fw_t('SICH.W_HAKEN'), $wo));
+    }
+    if ($k === 'aktionstoken') {
+        return fw_token_gueltig($w) ? array() : array(sprintf(fw_t('SICH.W_TOKEN'), $wo));
+    }
+    if ($k === 'broker_port' && is_int($w)) { $w = (string) $w; }
+    if (!is_string($w)) { return array(sprintf(fw_t('SICH.W_TEXT'), $wo)); }
+    if ($k === 'mqtt_topic') {
+        return (preg_match('#^[a-z0-9_\-/]+$#', $w) && trim($w, '/') === $w)
+            ? array() : array(sprintf(fw_t('SICH.W_THEMA'), $wo));
+    }
+    if ($k === 'ruhe_von' || $k === 'ruhe_bis') {
+        return ($w === '' || preg_match('/^([01][0-9]|2[0-3]):[0-5][0-9]$/', $w))
+            ? array() : array(sprintf(fw_t('SICH.W_UHRZEIT'), $wo));
+    }
+    if ($k === 'signal_url') {
+        return ($w === '' || preg_match('#^https?://[^\s"\']+$#', $w))
+            ? array() : array(sprintf(fw_t('SICH.W_ADRESSE'), $wo));
+    }
+    if ($k === 'broker_port') {
+        return ($w === '' || (preg_match('/^[0-9]{1,5}$/', $w) && (int) $w >= 1 && (int) $w <= 65535))
+            ? array() : array(sprintf(fw_t('SICH.W_PORT'), $wo));
+    }
+    if ($k === 'broker_pass') {
+        return fw_steuerzeichen($w) ? array(sprintf(fw_t('SICH.W_KENNWORT'), $wo)) : array();
+    }
+    /* broker_host, broker_user, broker_id: was das Formular annimmt. */
+    return fw_sich_text_taugt($w) ? array() : array(sprintf(fw_t('SICH.W_ZEICHEN'), $wo));
+}
+
+/* ==================================================================
+ * Einmalmeldung nach dem POST (U8, Regeln/04)
+ *
+ * Jeder POST endet mit 303; das Ergebnis reist in einer Datei im
+ * Datenordner (0600), die der folgende GET liest UND loescht; aelter als
+ * 120 s wird verworfen. Bauart eb_einmal_schreiben/lesen der Einspeisebremse
+ * 0.9.28. Aktionstoken und Broker-Kennwort stehen nicht darin: sie werden
+ * vor dem Schreiben durch *** ersetzt (ein Kennwort erst ab vier Zeichen,
+ * sonst traefe das Ersetzen gewoehnliche Woerter).
+ * ================================================================== */
+
+function fw_einmal_schreiben($meldungen, $fehler, $misslungen, $test)
+{
+    $f = fw_paths()['einmal'];
+    if ($f === '') { return false; }
+    $cfg = fw_config(false);
+    $geheim = array();
+    foreach (array('aktionstoken', 'broker_pass') as $k) {
+        $s = is_string($cfg[$k]) ? $cfg[$k] : '';
+        if (strlen($s) >= 4) { $geheim[] = $s; }
+    }
+    $weg = function ($t) use ($geheim) {
+        return $geheim ? str_replace($geheim, '***', (string) $t) : (string) $t;
+    };
+    return fw_json_schreiben($f, array(
+        'zeit' => time(),
+        'meldungen' => array_values(array_map($weg, $meldungen)),
+        'fehler' => array_values(array_map($weg, $fehler)),
+        'misslungen' => array_values(array_map($weg, $misslungen)),
+        'test' => $weg($test)), 0600);
+}
+
+function fw_einmal_lesen()
+{
+    $f = fw_paths()['einmal'];
+    if ($f === '' || !is_file($f)) { return null; }
+    $d = json_decode((string) @file_get_contents($f), true);
+    @unlink($f);
+    if (!is_array($d) || !isset($d['zeit']) || abs(time() - (int) $d['zeit']) > 120) { return null; }
+    $liste = function ($k) use ($d) {
+        return isset($d[$k]) && is_array($d[$k]) ? array_map('strval', $d[$k]) : array();
+    };
+    return array('meldungen' => $liste('meldungen'), 'fehler' => $liste('fehler'),
+                 'misslungen' => $liste('misslungen'),
+                 'test' => isset($d['test']) ? (string) $d['test'] : '');
+}
+
+/* ==================================================================
+ * Praefixwechsel (M5)
+ *
+ * Wer das Praefix aendert oder MQTT abschaltet, hinterliesse die
+ * zurueckbehaltenen Themen unter dem bisherigen Praefix fuer immer im
+ * Broker. Die Oberflaeche merkt sich das bisherige Praefix hier; der
+ * Waechter raeumt im naechsten Durchgang darunter ab (nur Themen der
+ * Funkwacht), liest nach und streicht es erst dann aus der Liste.
+ * ================================================================== */
+
+function fw_altpraefix_merken($praefix)
+{
+    $f = fw_paths()['altpraefix'];
+    if ($f === '' || !is_string($praefix) || $praefix === '') { return false; }
+    $d = fw_json_lesen($f);
+    $liste = isset($d['praefixe']) && is_array($d['praefixe']) ? $d['praefixe'] : array();
+    if (!in_array($praefix, $liste, true)) { $liste[] = $praefix; }
+    return fw_json_schreiben($f, array('praefixe' => array_values($liste)));
+}
+
+/* ==================================================================
  * Sichern und Zurueckspielen
  * ================================================================== */
 
@@ -1309,37 +1739,72 @@ function fw_sicherung_bauen()
 /**
  * Eine hochgeladene Sicherung pruefen und uebernehmen.
  *
- * Abgewiesen wird, was nicht passt - nie zurechtgebogen. Rueckgabe:
- * array(ok, Text).
+ * Abgewiesen wird, was nicht passt - nie zurechtgebogen (U3, Pruefung
+ * 29.09.2026). Jeder Schluessel und jeder Wert geht durch dieselben
+ * Pruefstellen wie das Formular; fremde und fehlende Schluessel werden
+ * beanstandet; alle Beanstandungen werden gesammelt, und eine halb gueltige
+ * Datei aendert GAR NICHTS. Der lesbare Kopf (_erzeugt, _fassung) wird
+ * ueberlesen. Rueckgabe: array(ok, Text, Liste der Beanstandungen).
  */
 function fw_sicherung_lesen($roh)
 {
     if (!is_string($roh) || trim($roh) === '') {
-        return array(0, fw_t('SICH.LEER'));
+        return array(0, fw_t('SICH.LEER'), array());
     }
     if (strlen($roh) > 1048576) {
-        return array(0, fw_t('SICH.ZU_GROSS'));
+        return array(0, fw_t('SICH.ZU_GROSS'), array());
     }
     $d = json_decode($roh, true);
     if (!is_array($d)) {
-        return array(0, sprintf(fw_t('SICH.KEIN_JSON'), json_last_error_msg()));
+        return array(0, sprintf(fw_t('SICH.KEIN_JSON'), json_last_error_msg()), array());
     }
-    if (!isset($d['geraete']) || !is_array($d['geraete'])) {
-        return array(0, fw_t('SICH.KEIN_FUNKWACHT'));
+    if (!array_key_exists('geraete', $d) || ($d !== array() && array_values($d) === $d)) {
+        return array(0, fw_t('SICH.KEIN_FUNKWACHT'), array());
     }
-    $neu = array_merge(fw_vorgaben(), $d);
-    unset($neu['_erzeugt'], $neu['_fassung'], $neu['kaputt']);
+    $vorgaben = fw_vorgaben();
+    $mangel = array();
+    foreach ($d as $k => $w) {
+        $k = (string) $k;
+        if ($k !== '' && $k[0] === '_') { continue; }      // lesbarer Kopf
+        if (!array_key_exists($k, $vorgaben)) {
+            $mangel[] = sprintf(fw_t('SICH.FREMD'), sprintf(fw_t('SICH.SCHLUESSEL'), $k));
+            continue;
+        }
+        $mangel = array_merge($mangel, fw_einstellung_pruefen($k, $w));
+    }
+    $fehlt = array();
+    foreach (array_keys($vorgaben) as $k) {
+        if (!array_key_exists($k, $d)) { $fehlt[] = $k; }
+    }
+    if ($fehlt) {
+        $mangel[] = sprintf(fw_t('SICH.FEHLT'), implode(', ', $fehlt));
+    }
+    if (!$mangel && !empty($d['signal_ein']) && $d['signal_url'] === '') {
+        $mangel[] = fw_t('FEHLER.SIGNAL_LEER');
+    }
+    if ($mangel) {
+        return array(0, fw_t('SICH.ABGEWIESEN'), $mangel);
+    }
+    /* Alles geprueft: uebernommen wird genau der Inhalt der Datei, nur in
+     * der Schreibweise der Konfiguration (true -> 1, Zahltext -> Zahl). */
+    $neu = array();
+    foreach (array_keys($vorgaben) as $k) { $neu[$k] = $d[$k]; }
     $anzahl = 0;
     foreach ($neu['geraete'] as $i => $g) {
-        if (!is_array($g)) { return array(0, sprintf(fw_t('SICH.ZEILE_KAPUTT'), $i + 1)); }
         $neu['geraete'][$i] = fw_geraet_geradebiegen($g);
-        if (trim((string) $neu['geraete'][$i]['name']) !== '') { $anzahl++; }
+        if ($neu['geraete'][$i]['name'] !== '') { $anzahl++; }
     }
+    foreach (array_keys(fw_betrieb_zahlen()) as $k) { $neu[$k] = (int) $neu[$k]; }
+    $neu['zeilen'] = (int) $neu['zeilen'];
+    foreach (array('mqtt_ein', 'global_aus', 'melden_aktiv', 'signal_ein') as $k) {
+        $neu[$k] = $neu[$k] ? 1 : 0;
+    }
+    $neu['broker_port'] = (string) $neu['broker_port'];
     if (!fw_config_speichern($neu)) {
-        return array(0, fw_t('FEHLER.SPEICHERN'));
+        return array(0, fw_t('FEHLER.SPEICHERN'), array());
     }
     fw_log('Einstellungen aus einer Sicherung zurueckgespielt.');
-    return array(1, sprintf(fw_t('SICH.OK'), $anzahl));
+    return array(1, sprintf(fw_t('SICH.OK'), $anzahl), array());
 }
 
 /* ==================================================================

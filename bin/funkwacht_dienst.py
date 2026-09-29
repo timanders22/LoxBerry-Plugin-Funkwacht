@@ -155,7 +155,7 @@ def pfade() -> dict:
         # scheitern an einem leeren Pfad still; main() bricht vorher ab.
         return {k: "" for k in ("home", "plugin", "config", "data", "stand",
                                 "historie", "auftraege", "mqtt_stand",
-                                "verlauf", "log", "general")}
+                                "verlauf", "log", "general", "altpraefix")}
     data = os.path.join(home, "data", "plugins", ordner)
     return {
         "home": home,
@@ -170,6 +170,9 @@ def pfade() -> dict:
         "historie": os.path.join(data, "historie.json"),
         "auftraege": os.path.join(data, "auftraege.json"),
         "mqtt_stand": os.path.join(data, "mqtt_stand.json"),
+        # M5: Praefixe, unter denen einmal abgeraeumt werden soll (die
+        # Oberflaeche traegt ein, der Waechter streicht nach dem Nachlesen).
+        "altpraefix": os.path.join(data, "mqtt_altpraefix.json"),
         "verlauf": os.path.join(data, "verlauf"),
         "log": os.path.join(home, "log", "plugins", ordner, "funkwacht.log"),
         "general": os.path.join(home, "config", "system", "general.json"),
@@ -202,17 +205,33 @@ def json_lesen(pfad, vorgabe=None):
 
 
 def json_schreiben(pfad, daten) -> bool:
-    """Erst in eine Nebendatei, dann umbenennen."""
+    """Erst in eine Nebendatei, dann umbenennen.
+
+    U1 (Pruefung 29.09.2026): die Nebendatei wird zurueckgelesen und
+    verglichen, bevor sie die Datei ersetzt; scheitert irgendein Schritt,
+    wird sie weggeraeumt - bis 1.0.8 blieb *.tmp.<pid> nach einer Ausnahme
+    liegen. Die Aufrufstellen werten den Rueckgabewert aus.
+    """
+    if not pfad:
+        return False
     ordner = os.path.dirname(pfad)
+    tmp = "%s.tmp.%d" % (pfad, os.getpid())
     try:
         if not os.path.isdir(ordner):
             os.makedirs(ordner, exist_ok=True)
-        tmp = "%s.tmp.%d" % (pfad, os.getpid())
+        text = json.dumps(daten, ensure_ascii=False, indent=1)
         with open(tmp, "w", encoding="utf-8") as f:
-            json.dump(daten, f, ensure_ascii=False, indent=1)
+            f.write(text)
+        with open(tmp, "r", encoding="utf-8") as f:
+            if f.read() != text:
+                raise OSError("die Nebendatei weicht nach dem Schreiben ab")
         os.replace(tmp, pfad)
         return True
     except Exception:
+        try:
+            os.remove(tmp)
+        except OSError:
+            pass
         return False
 
 
@@ -387,27 +406,53 @@ def faehigkeiten() -> dict:
     return f
 
 
+# Wo die Einhaengetabelle und die Blockgeraete liegen - Konstanten wie
+# USB_BASIS, damit sich systemgeraete() gegen einen nachgebauten Baum messen
+# laesst (D6).
+PROC_MOUNTS = "/proc/mounts"
+SYS_BLOCK = "/sys/block"
+SYS_DEV_BLOCK = "/sys/dev/block"
+
+
+def geraetenummer(pfad) -> tuple:
+    """(major, minor) des Datentraegers, auf dem pfad liegt."""
+    st = os.stat(pfad)
+    return os.major(st.st_dev), os.minor(st.st_dev)
+
+
 def systemgeraete() -> list:
     """USB-Kennungen, an denen / oder /boot haengen - die sind tabu.
 
     Wird in JEDEM Durchlauf neu gelesen: wer nach dem Start eine USB-Platte
     einhaengt, war vorher bis zum naechsten Neustart des Waechters
     ungeschuetzt.
+
+    D6 (Pruefung 29.09.2026): startet der Kernel die Wurzel ohne initramfs,
+    nennt /proc/mounts nur /dev/root - ein /sys/block/root gibt es nicht,
+    und bis 1.0.8 blieb die Liste dann leer (Boot von SD, Wurzel auf einer
+    USB-Platte). Deshalb zusaetzlich ueber die Geraetenummer des
+    eingehaengten Verzeichnisses: /sys/dev/block/<major>:<minor> fuehrt
+    ueber seinen Verweis zum USB-Pfad, auch fuer eine Partition.
     """
     tabu = []
     try:
-        with open("/proc/mounts", "r", encoding="utf-8", errors="replace") as f:
+        with open(PROC_MOUNTS, "r", encoding="utf-8", errors="replace") as f:
             zeilen = f.readlines()
     except Exception:
         return tabu
-    geraete = set()
+    ziele = set()
     for z in zeilen:
         t = z.split()
         if len(t) >= 2 and t[1] in ("/", "/boot", "/boot/firmware") and t[0].startswith("/dev/"):
-            geraete.add(os.path.basename(t[0]).rstrip("0123456789"))
-    for name in geraete:
+            ziele.add(os.path.join(SYS_BLOCK, os.path.basename(t[0]).rstrip("0123456789")))
+            try:
+                gross, klein = geraetenummer(t[1])
+                ziele.add(os.path.join(SYS_DEV_BLOCK, "%d:%d" % (gross, klein)))
+            except Exception:
+                pass
+    for pfad in sorted(ziele):
         try:
-            ziel = os.path.realpath("/sys/block/%s" % name)
+            ziel = os.path.realpath(pfad)
         except Exception:
             continue
         for teil in ziel.split("/"):
@@ -651,16 +696,64 @@ def messen(g, vorher_groesse=None):
 # Heilen
 # ======================================================================
 
+def kennung_am_anschluss(pfad) -> tuple:
+    """(Kennung vid:pid, Lage) am USB-Knoten pfad; Lage 'da', 'fehlt' oder
+    'unlesbar'. Eine Schnittstelle (1-1.3:1.0) wird am Geraet 1-1.3 gelesen."""
+    geraet = str(pfad or "").split(":", 1)[0]
+    basis = os.path.join(USB_BASIS, geraet)
+    if not geraet or not os.path.isdir(basis):
+        return "", "fehlt"
+    try:
+        with open(os.path.join(basis, "idVendor"), "r") as f:
+            vid = f.read().strip().lower()
+        with open(os.path.join(basis, "idProduct"), "r") as f:
+            pid = f.read().strip().lower()
+    except Exception:
+        return "", "unlesbar"
+    return "%s:%s" % (vid, pid), "da"
+
+
+def kennung_abweichung(g, pfad) -> str:
+    """Steckt am Zielanschluss ein ANDERES Geraet als der Stick? "" heisst nein.
+
+    D1 (Pruefung 29.09.2026): bis 1.0.8 sah der Waechter die fremde Kennung
+    (Bemerkung "an diesem Anschluss steckt 0658:0200 statt 1a86:55d4") und
+    setzte den Anschluss trotzdem per unbind/bind zurueck. Geprueft wird
+    unmittelbar vor Stufe 2 und Stufe 3, wenn eine Kennung eingetragen ist.
+    Steckt dort gar nichts, trifft der Eingriff kein fremdes Geraet.
+    """
+    soll = str(g.get("kennung") or "").strip().lower()
+    if not soll:
+        return ""
+    ist, lage = kennung_am_anschluss(pfad)
+    if lage == "fehlt":
+        return ""
+    if lage == "unlesbar":
+        return "an %s laesst sich die Kennung nicht lesen (erwartet %s)" % (pfad, soll)
+    if ist != soll:
+        return "an %s steckt %s statt %s" % (pfad, ist, soll)
+    return ""
+
+
 def heilen(g, stufe, tabu):
     """Eine Stufe ausfuehren. Rueckgabe: (ok, abgelehnt, Beschreibung)."""
     if stufe == fw_pruef.STUFE_DIENST:
+        # D5 (Pruefung 29.09.2026): der Name wird UNMITTELBAR vor sudo
+        # geprueft - die Rechtedatei erlaubt "systemctl restart *", also jede
+        # Einheit; bis 1.0.8 ging "reboot.target" ungeprueft hinaus.
         if g["container"]:
+            grund = fw_pruef.container_pruefen(g["container"])
+            if grund:
+                return 0, 1, "ABGELEHNT: Container '%s' - %s." % (g["container"], grund)
             rc, aus = befehl(["docker", "restart", g["container"]], 60)
             if rc != 0:
                 rc, aus = befehl(["sudo", "-n", "docker", "restart", g["container"]], 60)
             return (1 if rc == 0 else 0), 0, "docker restart %s -> %s" % (g["container"], rc)
-        rc, aus = befehl(["sudo", "-n", "systemctl", "restart", g["dienst"]], 60)
-        return (1 if rc == 0 else 0), 0, "systemctl restart %s -> %s" % (g["dienst"], rc)
+        einheit, grund = fw_pruef.einheit_pruefen(g["dienst"])
+        if grund:
+            return 0, 1, "ABGELEHNT: Dienst '%s' - %s." % (g["dienst"], grund)
+        rc, aus = befehl(["sudo", "-n", "systemctl", "restart", einheit], 60)
+        return (1 if rc == 0 else 0), 0, "systemctl restart %s -> %s" % (einheit, rc)
 
     if stufe == fw_pruef.STUFE_SYSFS:
         u = g["usb_pfad"]
@@ -670,6 +763,9 @@ def heilen(g, stufe, tabu):
         if fw_pruef.ist_systemgeraet(u, tabu):
             return 0, 1, ("ABGELEHNT: %s gehoert zu einem Geraet, auf dem das System "
                           "liegt (%s)." % (u, ", ".join(tabu)))
+        abw = kennung_abweichung(g, u)
+        if abw:
+            return 0, 1, "ABGELEHNT: %s." % abw
         rc1, a1 = befehl(["sudo", "-n", "tee", "/sys/bus/usb/drivers/usb/unbind"],
                          20, eingabe=u)
         time.sleep(2)
@@ -679,9 +775,14 @@ def heilen(g, stufe, tabu):
         return ok, 0, "sysfs unbind/bind %s -> %s/%s" % (u, rc1, rc2)
 
     if stufe == fw_pruef.STUFE_UHUBCTL:
-        if not re.match(r"^[0-9]+(-[0-9]+(\.[0-9]+)*)?$", g["hub"] or ""):
-            return 0, 1, ("ABGELEHNT: '%s' sieht nicht wie eine Verteilerkennung aus "
-                          "(erwartet etwa 1-1)." % g["hub"])
+        # D2 (Pruefung 29.09.2026): Wurzelverteiler, hub, hub.port und alles
+        # darunter gegen die Systemgeraete; D1: Kennung am Zielanschluss.
+        grund = fw_pruef.verteiler_sperre(g["hub"], g["port"], tabu)
+        if grund:
+            return 0, 1, "ABGELEHNT: Stufe 3 an %s Port %s - %s." % (g["hub"], g["port"], grund)
+        abw = kennung_abweichung(g, "%s.%d" % (g["hub"], g["port"]))
+        if abw:
+            return 0, 1, "ABGELEHNT: %s." % abw
         rc1, a1 = befehl(["sudo", "-n", "uhubctl", "-l", g["hub"],
                           "-p", str(g["port"]), "-a", "off"], 30)
         time.sleep(3)
@@ -702,23 +803,36 @@ def wuerde_heilen(g, stufe, tabu):
     """
     if stufe == fw_pruef.STUFE_DIENST:
         if g["container"]:
+            grund = fw_pruef.container_pruefen(g["container"])
+            if grund:
+                return "ABGELEHNT: Container '%s' - %s" % (g["container"], grund)
             return "docker restart %s   (sonst: sudo -n docker restart %s)" % (
                 g["container"], g["container"])
         if not g["dienst"]:
             return "ABGELEHNT: weder Dienst noch Container eingetragen"
-        return "sudo -n systemctl restart %s" % g["dienst"]
+        einheit, grund = fw_pruef.einheit_pruefen(g["dienst"])
+        if grund:
+            return "ABGELEHNT: Dienst '%s' - %s" % (g["dienst"], grund)
+        return "sudo -n systemctl restart %s" % einheit
     if stufe == fw_pruef.STUFE_SYSFS:
         u = g["usb_pfad"]
         if not re.match(r"^[0-9]+-[0-9]+(\.[0-9]+)*(:[0-9]+\.[0-9]+)?$", u or ""):
             return "ABGELEHNT: '%s' sieht nicht wie ein USB-Pfad aus" % u
         if fw_pruef.ist_systemgeraet(u, tabu):
             return "ABGELEHNT: %s traegt das System (%s)" % (u, ", ".join(tabu))
+        abw = kennung_abweichung(g, u)
+        if abw:
+            return "ABGELEHNT: %s" % abw
         return ("echo %s | sudo -n tee /sys/bus/usb/drivers/usb/unbind   "
                 "[2 s warten]   echo %s | sudo -n tee /sys/bus/usb/drivers/usb/bind"
                 % (u, u))
     if stufe == fw_pruef.STUFE_UHUBCTL:
-        if not re.match(r"^[0-9]+(-[0-9]+(\.[0-9]+)*)?$", g["hub"] or ""):
-            return "ABGELEHNT: '%s' sieht nicht wie eine Verteilerkennung aus" % g["hub"]
+        grund = fw_pruef.verteiler_sperre(g["hub"], g["port"], tabu)
+        if grund:
+            return "ABGELEHNT: Stufe 3 an %s Port %s - %s" % (g["hub"], g["port"], grund)
+        abw = kennung_abweichung(g, "%s.%d" % (g["hub"], g["port"]))
+        if abw:
+            return "ABGELEHNT: %s" % abw
         return ("sudo -n uhubctl -l %s -p %d -a off   [3 s warten]   "
                 "sudo -n uhubctl -l %s -p %d -a on"
                 % (g["hub"], g["port"], g["hub"], g["port"]))
@@ -812,9 +926,13 @@ def felder(stand: dict) -> list:
                     fw_pruef.WARUM_NR.get(e.get("warum", ""), 9)))
         aus.append((v + "name", None, e.get("name", "")))
         aus.append((v + "grund", None, e.get("grund", "")))
-        aus.append((v + "warum", None, e.get("warum", "")))
+        # M7 (Pruefung 29.09.2026): warum und bemerkung gehen bei der
+        # Erholung als "-" hinaus. Ein leerer Wert geht gar nicht hinaus
+        # (mqtt_senden), und ein virtueller Texteingang in Loxone behielt
+        # sonst "abstand" oder "Container steht" fuer immer.
+        aus.append((v + "warum", None, e.get("warum", "") or "-"))
         aus.append((v + "letzte_tat", None, e.get("letzte_tat", "")))
-        aus.append((v + "bemerkung", None, e.get("bemerkung", "")))
+        aus.append((v + "bemerkung", None, e.get("bemerkung", "") or "-"))
     return aus
 
 
@@ -835,7 +953,8 @@ def felder(stand: dict) -> list:
 #   faellt nach 24 h von selbst heraus, ohne dass jemand sendet.
 # * Ein Text, der REGELMAESSIG LEER ist (warum, bemerkung), ist nie retained:
 #   leere Werte gehen gar nicht hinaus (mqtt_senden), ein zurueckbehaltener
-#   Text bliebe dann fuer immer stehen.
+#   Text bliebe dann fuer immer stehen. Seit der Pruefung vom 29.09.2026
+#   (M7) geht "leer" bei diesen beiden als "-" hinaus.
 # * ts ist das Lebenszeichen und deshalb nie retained - retained zeigte es
 #   immer "lebt".
 # Unbekannter Stamm: publish. Die Oberflaeche fuehrt dieselbe Tabelle
@@ -910,7 +1029,18 @@ def mqtt_wert_saeubern(wert):
     return text.strip()
 
 
+# M8 (Pruefung 29.09.2026): gesendet wird nur, was sich geaendert hat; den
+# vollen Satz nach dem Start, nach einem Praefixwechsel und alle 30 Minuten.
+# Bis 1.0.8 gingen in JEDEM Takt alle Themen hinaus (24 Sticks: 221
+# Datagramme je Durchgang) - der UDP-Eingang des Gateways verwirft unter Last
+# 17 bis 70 % (Regeln/07). Dazu 1 ms Pause je 20 Datagramme.
+VOLL_ALLE_S = 1800
+_gesendet = {}
+_voll_naechster = 0.0
+
+
 def mqtt_senden(paare, praefix):
+    global _voll_naechster
     g, _ = json_lesen(pfade()["general"], {})
     m = g.get("Mqtt") or g.get("mqtt") or {}
     port = int(fw_pruef.zahl(m.get("Udpinport") or m.get("udpinport"), 0))
@@ -922,17 +1052,32 @@ def mqtt_senden(paare, praefix):
     if not autostart:
         log("MQTT: das Gateway steht nicht auf Autostart (System, MQTT Gateway). "
             "Es wird gesendet, aber vermutlich hoert niemand zu.", "mqtt_aus")
+    jetzt = time.time()
+    voll = jetzt >= _voll_naechster or _gesendet.get("#praefix") != praefix
+    if voll:
+        _gesendet.clear()
+        _gesendet["#praefix"] = praefix
     try:
         s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        n = 0
         for k, v in paare:
             if v is None or v == "":
+                continue
+            wert = mqtt_wert_saeubern(v)
+            if not voll and _gesendet.get(k) == wert:
                 continue
             # "retain" ist ein eigener Befehl des UDP-Eingangs, gleichrangig
             # mit "publish" (mqttgateway.pl, gemessen 06.09.2026, Regeln/07).
             befehl_wort = "retain" if retain_fuer(k) else "publish"
-            zeile = "%s %s/%s %s" % (befehl_wort, praefix, k, mqtt_wert_saeubern(v))
+            zeile = "%s %s/%s %s" % (befehl_wort, praefix, k, wert)
             s.sendto(zeile.encode("utf-8"), ("127.0.0.1", port))
+            _gesendet[k] = wert
+            n += 1
+            if n % 20 == 0:
+                time.sleep(0.001)
         s.close()
+        if voll:
+            _voll_naechster = jetzt + VOLL_ALLE_S
         return True
     except Exception as e:
         log("MQTT: %s" % e, "mqtt_fehler")
@@ -1087,7 +1232,11 @@ def _broker_leeren(praefix, auswahl, warten=3.0) -> dict:
         return erg
     import threading
     import fw_mqtt
-    zug = fw_mqtt.zugang()
+    # M4 (Pruefung 29.09.2026): abgeraeumt wird am Broker des GATEWAYS
+    # (general.json) - dorthin sendet der Waechter ueber den UDP-Eingang,
+    # dort liegen die eigenen Themen. Bis 1.0.8 galt der Zugang des
+    # Mithoerers; mit eigenem Broker fuer ihn raeumte die Funkwacht nie ab.
+    zug = fw_mqtt.zugang_gateway()
     gesehen = set()
     angemeldet = threading.Event()
     code = {"wert": None}
@@ -1125,9 +1274,15 @@ def _broker_leeren(praefix, auswahl, warten=3.0) -> dict:
         return erg
     k.loop_start()
     try:
-        if not angemeldet.wait(10) or code["wert"]:
-            erg["grund"] = ("der Broker hat die Anmeldung nicht angenommen (Code %s)"
-                            % code["wert"])
+        # M6: Klartext wie im Mithoerer; ohne CONNACK ein eigener Satz.
+        if not angemeldet.wait(10):
+            erg["grund"] = ("der Broker %s:%s hat binnen 10 s nicht geantwortet (kein CONNACK)"
+                            % (zug["host"], zug["port"]))
+            return erg
+        if code["wert"]:
+            erg["grund"] = ("der Broker hat die Anmeldung abgewiesen: %s (Code %s)"
+                            % (fw_mqtt.CONNACK_TEXT.get(code["wert"], "unbekannt"),
+                               code["wert"]))
             return erg
         k.subscribe(praefix + "/#")
         time.sleep(warten)
@@ -1218,6 +1373,62 @@ def stick_themen_abraeumen(praefix, aktiv, warten=3.0) -> int:
         log("MQTT: %d zurueckbehaltene Themen entfernter Sticks geloescht und "
             "nachgelesen (%s)." % (len(erg["geleert"]), ", ".join(erg["geleert"])))
     return 0
+
+
+_altpraefix_naechster = 0.0
+
+
+def altpraefixe_abraeumen(cfg, warten=3.0) -> None:
+    """M5 (Pruefung 29.09.2026): unter einem bisherigen Praefix abraeumen.
+
+    Die Oberflaeche traegt beim Speichern eines neuen Praefix (und beim
+    Ausschalten von MQTT) das bisherige in mqtt_altpraefix.json ein. Hier wird
+    darunter einmal abgeraeumt - nur Themen der Funkwacht, am Broker des
+    Gateways, mit Nachlesen - und das Praefix erst DANACH aus der Liste
+    gestrichen. Ist es wieder das laufende Praefix bei eingeschaltetem MQTT,
+    faellt es ohne Abraeumen heraus. Gescheitert: in zehn Minuten wieder.
+    """
+    global _altpraefix_naechster
+    datei = pfade()["altpraefix"]
+    if not datei or time.time() < _altpraefix_naechster:
+        return
+    d, _ = json_lesen(datei, {})
+    liste = d.get("praefixe") if isinstance(d, dict) else None
+    if not isinstance(liste, list) or not liste:
+        return
+    jetzt_praefix = str(cfg.get("mqtt_topic") or "").strip("/")
+    offen = []
+    for eintrag in liste:
+        p = str(eintrag or "").strip("/")
+        if not p or "#" in p or "+" in p:
+            continue
+        if p == jetzt_praefix and cfg.get("mqtt_ein"):
+            continue
+        erg = _broker_leeren(p, lambda t, p=p: bool(eigenes_thema(p, t)), warten)
+        if erg["rc"] == 0:
+            log("MQTT: unter dem bisherigen Praefix '%s/' %d behaltene Themen geloescht und "
+                "nachgelesen." % (p, len(erg["geleert"])))
+        else:
+            offen.append(p)
+            log("MQTT: unter dem bisherigen Praefix '%s/' liess sich nicht abraeumen - %s - "
+                "neuer Versuch spaeter." % (p, erg["grund"] or "es blieb etwas stehen"),
+                "altpraefix")
+    # Unmittelbar vor dem Schreiben neu lesen: die Oberflaeche kann in der
+    # Zwischenzeit ein weiteres Praefix eingetragen haben.
+    d2, _ = json_lesen(datei, {})
+    neu = d2.get("praefixe") if isinstance(d2, dict) else None
+    rest = [x for x in (neu if isinstance(neu, list) else [])
+            if str(x or "").strip("/") in offen or x not in liste]
+    if rest:
+        if not json_schreiben(datei, {"praefixe": rest}):
+            log("MQTT: %s liess sich nicht schreiben." % datei, "altpraefix_schreiben")
+    else:
+        try:
+            os.remove(datei)
+        except OSError:
+            pass
+    if offen:
+        _altpraefix_naechster = time.time() + 600
 
 
 def _stick_nummern() -> list:
@@ -1444,8 +1655,19 @@ def auftraege_holen():
     return liste if isinstance(liste, list) else []
 
 
-def auftraege_ausfuehren(h, cfg, liste):
-    """Quittieren und Wartung anwenden. Rueckgabe: Zahl der ausgefuehrten."""
+def auftrag_ablegen(eintrag) -> bool:
+    """Einen Auftrag an den laufenden Waechter anhaengen (wie fw_auftrag() in
+    fw_lib.php: hoechstens 20, dieselbe Datei)."""
+    p = pfade()["auftraege"]
+    d, _ = json_lesen(p, {})
+    liste = d.get("auftraege") if isinstance(d, dict) else None
+    liste = liste if isinstance(liste, list) else []
+    liste.append(eintrag)
+    return json_schreiben(p, {"auftraege": liste[-20:]})
+
+
+def auftraege_ausfuehren(h, cfg, liste, tabu=None):
+    """Quittieren, Wartung und Heilwuensche anwenden. Rueckgabe: Zahl der ausgefuehrten."""
     n = 0
     for a in liste:
         if not isinstance(a, dict):
@@ -1456,6 +1678,12 @@ def auftraege_ausfuehren(h, cfg, liste):
             ziele = [str(nr)] if nr else list(h["geraete"].keys())
             for z in ziele:
                 he = historie_eintrag(h, z)
+                # D7 (Pruefung 29.09.2026): Quittieren loescht Alarm und
+                # Zaehler, nicht die laufende Erholungszeit. Der Zeitpunkt des
+                # letzten Versuchs bleibt als erholung_ab stehen; bis 1.0.8
+                # startete der Waechter 60 s nach einem Neustart den naechsten.
+                if he.get("verlauf"):
+                    he["erholung_ab"] = float(he["verlauf"][-1])
                 he["verlauf"] = []
                 h["stufen"][z] = 0
             log("Quittiert: %s" % ("Stick %d" % nr if nr else "alle Sticks"))
@@ -1472,6 +1700,9 @@ def auftraege_ausfuehren(h, cfg, liste):
             for z in list(h["geraete"].keys()):
                 historie_eintrag(h, z)["stufenstatistik"] = {}
             log("Stufenstatistik zurueckgesetzt.")
+            n += 1
+        elif was == "heilen":
+            log(hand_im_dienst(h, cfg, tabu or [], a, time.time()), kb=cfg["log_kb"])
             n += 1
     return n
 
@@ -1535,7 +1766,8 @@ def durchlauf(cfg, hist, tabu, jetzt=None):
 
         entschluss = fw_pruef.entscheiden(
             g, alter, verlauf, bisher, jetzt, schonzeit=schonzeit, sperre=sperre,
-            statistik=statistik_lesen(he))
+            statistik=statistik_lesen(he),
+            letzter_versuch=float(he.get("erholung_ab") or 0) or None)
         entschluesse.append(entschluss)
 
         # --- Erfolgskontrolle der letzten Heilung ---------------------
@@ -1662,7 +1894,9 @@ def melden(cfg, meldungen):
 
 
 def veroeffentlichen(cfg, stand):
-    global _altlast_naechster, _sticks_naechster
+    global _altlast_naechster, _sticks_naechster, _voll_naechster
+    # M5: vor dem Schalter - auch "MQTT aus" hinterlaesst ein Praefix.
+    altpraefixe_abraeumen(cfg)
     if not cfg.get("mqtt_ein"):
         return
     praefix = cfg["mqtt_topic"].strip("/")
@@ -1672,8 +1906,14 @@ def veroeffentlichen(cfg, stand):
     # Versuch erst in zehn Minuten: ein fehlender Broker soll nicht jeden
     # Takt um die Wartezeit verlaengern.
     if time.time() >= _altlast_naechster:
+        merker = retain_merker_datei()
+        war_erledigt = bool(merker) and os.path.isfile(merker)
         if mqtt_altlast_abraeumen(praefix) != 0:
             _altlast_naechster = time.time() + 600
+        elif not war_erledigt:
+            # M8: nach dem Abraeumen geht der volle Satz einmal hinaus, sonst
+            # stuende ein geleertes Thema bis zu 30 Minuten leer.
+            _voll_naechster = 0.0
     paare = [(m, w) for m, _, w in felder(stand)]
     mqtt_senden(paare, praefix)
     # Themen geleerter Stick-Zeilen abraeumen (1.0.7) - NACH dem Senden: das
@@ -1721,7 +1961,8 @@ def trockenlauf(cfg, hist, tabu):
         alter, _, neustarts, bem, a1, a2 = messen(g, he.get("letzte_groesse"))
         e = fw_pruef.entscheiden(g, alter, verlauf, bisher, jetzt,
                                  schonzeit=schonzeit, sperre=sperre,
-                                 statistik=statistik_lesen(he))
+                                 statistik=statistik_lesen(he),
+                                 letzter_versuch=float(he.get("erholung_ab") or 0) or None)
         z.append("Stick %d: %s   (%s%s)" % (
             nr, g["name"], g["art"], "+" + g["art2"] if g["art2"] else ""))
         z.append("   gemessenes Alter : %s" % ("noch nie gehoert" if alter is None
@@ -1767,31 +2008,122 @@ def trockenlauf(cfg, hist, tabu):
     return "\n".join(z)
 
 
-def von_hand_heilen(cfg, hist, tabu, wunsch):
-    """Eine Stufe von Hand ausfuehren. wunsch ist "N" oder "N:S"."""
+def dauerlaeufer_pid() -> int:
+    """Laeuft der Waechter als Dauerlaeufer - ein ANDERER Prozess als dieser?
+
+    Dieselbe Probe wie ist_dienst() in bin/dienst.sh: genau zwei Argumente,
+    argv[0] ein Python, argv[1] dieses Skript (auch ueber einen Verweis oder
+    relativ zum Arbeitsverzeichnis des Prozesses). Gesucht wird ueber /proc,
+    nicht ueber dienst.pid - ein Dienst ohne PID-Datei waere sonst unsichtbar.
+    """
+    eigen = os.path.realpath(os.path.abspath(__file__))
+    try:
+        eintraege = os.listdir("/proc")
+    except OSError:
+        return 0
+    for n in eintraege:
+        if not n.isdigit() or int(n) == os.getpid():
+            continue
+        try:
+            with open("/proc/%s/cmdline" % n, "rb") as f:
+                roh = f.read()
+        except OSError:
+            continue
+        teile = roh.rstrip(b"\0").split(b"\0")
+        if len(teile) != 2 or not re.search(rb"(^|/)python[0-9.]*$", teile[0]):
+            continue
+        a1 = teile[1].decode("utf-8", "replace")
+        if not a1.startswith("/"):
+            try:
+                a1 = os.path.join(os.readlink("/proc/%s/cwd" % n), a1)
+            except OSError:
+                continue
+        if os.path.realpath(a1) == eigen:
+            return int(n)
+    return 0
+
+
+def hand_wunsch(cfg, hist, wunsch) -> tuple:
+    """Den Wunsch "N" oder "N:S" pruefen. Rueckgabe: (nr, Geraet, Stufe, "")
+    oder (0, None, 0, Grund)."""
     teile = str(wunsch).split(":")
     nr = int(fw_pruef.zahl(teile[0], 0))
     stufe = int(fw_pruef.zahl(teile[1], 0)) if len(teile) > 1 else 0
     liste = list(enumerate(cfg["geraete"], start=1))
     treffer = [(n, g) for n, g in liste if n == nr and g["name"]]
     if not treffer:
-        return "Stick %d gibt es nicht oder er hat keinen Namen." % nr
+        return 0, None, 0, "Stick %d gibt es nicht oder er hat keinen Namen." % nr
     n, g = treffer[0]
     if not stufe:
         he = historie_eintrag(hist, n)
         stufe = fw_pruef.naechste_stufe(g, int(hist["stufen"].get(str(n), 0)),
                                         statistik_lesen(he))
     if not stufe:
-        return "Fuer %s ist keine Stufe eingetragen." % g["name"]
+        return 0, None, 0, "Fuer %s ist keine Stufe eingetragen." % g["name"]
     if stufe not in (1, 2, 3):
-        return "Stufe %s gibt es nicht." % stufe
+        return 0, None, 0, "Stufe %s gibt es nicht." % stufe
     if not fw_pruef.stufe_belegt(g, stufe):
-        return "Fuer %s ist Stufe %d (%s) nicht eingetragen." % (
+        return 0, None, 0, "Fuer %s ist Stufe %d (%s) nicht eingetragen." % (
             g["name"], stufe, fw_pruef.STUFEN_NAMEN[stufe])
-    vorher, _, _, _, _, _ = messen(g, None)
-    ok, abgelehnt, was = heilen(g, stufe, tabu)
+    return n, g, stufe, ""
+
+
+def hand_buchen(hist, cfg, n, g, was, zeit) -> None:
+    """D3 (Pruefung 29.09.2026): ein Versuch von Hand steht im Verlauf - damit
+    rechnen Erholung, Abstand und Tagesgrenze des Waechters ihn mit. Bis 1.0.8
+    stand er dort nicht, und der naechste Durchlauf heilte sofort ein zweites
+    Mal."""
     he = historie_eintrag(hist, n)
+    he["verlauf"] = [float(t) for t in he.get("verlauf", [])][-49:] + [float(zeit)]
     ereignis(hist, cfg, n, g["name"], "von Hand: %s" % was)
+
+
+def hand_im_dienst(h, cfg, tabu, auftrag, jetzt) -> str:
+    """Ein Heilwunsch von Hand als Auftrag im laufenden Waechter (D3).
+
+    Mit den Bremsen des Waechters: Sperre (Aus-Schalter, Wartung,
+    Ruhefenster), Erholung, Heilen aus, Abstand und Tagesgrenze. Die
+    Anlaufschonzeit gilt nicht - sie schuetzt vor Messungen kurz nach dem
+    Start, und hier hat ein Mensch entschieden. Rueckgabe: Protokollsatz.
+    """
+    nr = int(fw_pruef.zahl(auftrag.get("nr"), 0))
+    st = int(fw_pruef.zahl(auftrag.get("stufe"), 0))
+    n, g, stufe, grund = hand_wunsch(cfg, h, "%d:%d" % (nr, st) if st else str(nr))
+    if grund:
+        return "Heilwunsch von Hand abgelehnt: %s" % grund
+    he = historie_eintrag(h, n)
+    verlauf = [float(t) for t in he.get("verlauf", [])][-50:]
+    letzter = float(he.get("erholung_ab") or 0) or None
+    warum = sperre_bestimmen(cfg, h, jetzt)
+    if not warum and fw_pruef.in_erholung(g, verlauf or ([letzter] if letzter else []), jetzt):
+        warum = "erholung"
+    if not warum:
+        erlaubt, w = fw_pruef.darf_heilen(g, verlauf, jetzt)
+        warum = "" if erlaubt else w
+    if warum:
+        ereignis(h, cfg, n, g["name"], "von Hand gewuenscht, abgelehnt: %s" % warum)
+        return "Heilwunsch von Hand fuer %s abgelehnt: %s." % (g["name"], warum)
+    ok, abgelehnt, was = heilen(g, stufe, tabu)
+    hand_buchen(h, cfg, n, g, was, jetzt)
+    verlauf_schreiben(cfg, n, g["name"], stufe,
+                      "gelungen" if ok else ("abgelehnt" if abgelehnt else "fehlgeschlagen"),
+                      "von Hand")
+    return "Von Hand geheilt (Auftrag): %s - %s" % (g["name"], was)
+
+
+def von_hand_heilen(cfg, hist, tabu, wunsch):
+    """Eine Stufe von Hand ausfuehren, wenn KEIN Waechter laeuft.
+
+    wunsch ist "N" oder "N:S". Rueckgabe: (Text, Buchung oder None); die
+    Buchung traegt main() in eine unmittelbar vorher neu gelesene
+    historie.json ein (D3).
+    """
+    n, g, stufe, grund = hand_wunsch(cfg, hist, wunsch)
+    if grund:
+        return grund, None
+    vorher, _, _, _, _, _ = messen(g, None)
+    zeit = time.time()
+    ok, abgelehnt, was = heilen(g, stufe, tabu)
     verlauf_schreiben(cfg, n, g["name"], stufe,
                       "gelungen" if ok else ("abgelehnt" if abgelehnt else "fehlgeschlagen"),
                       "von Hand")
@@ -1818,8 +2150,9 @@ def von_hand_heilen(cfg, hist, tabu, wunsch):
                  % g["ruhe_s"])
     z.append("")
     z.append("Dieser Versuch zaehlt NICHT in die Stufenstatistik: er kam von")
-    z.append("Hand und nicht aus einem gemessenen Ausfall.")
-    return "\n".join(z)
+    z.append("Hand und nicht aus einem gemessenen Ausfall. Er steht aber im")
+    z.append("Verlauf - Erholung, Abstand und Tagesgrenze rechnen ihn mit.")
+    return "\n".join(z), (n, g, was, zeit)
 
 
 def dienst_selbsttest():
@@ -1946,8 +2279,42 @@ def main():
             return 2
         cfg = config()
         hist = historie_lesen()
-        print(von_hand_heilen(cfg, hist, systemgeraete(), argv[i + 1]))
-        json_schreiben(pfade()["historie"], hist)
+        n, g, stufe, grund = hand_wunsch(cfg, hist, argv[i + 1])
+        if grund:
+            print(grund)
+            return 0
+        # D3 (Pruefung 29.09.2026): laeuft der Waechter, schreibt dieser
+        # Prozess NICHTS neben ihm her - der Wunsch geht als Auftrag in seine
+        # Warteschlange, und er fuehrt ihn mit seinen Bremsen aus. Bis 1.0.8
+        # ueberschrieb der Hand-Prozess nach seiner Wartezeit die Historie
+        # des Waechters, und 60 s nach dem ersten Neustart kam der zweite.
+        pid = dauerlaeufer_pid()
+        if pid:
+            teile = str(argv[i + 1]).split(":")
+            st = int(fw_pruef.zahl(teile[1], 0)) if len(teile) > 1 else 0
+            if auftrag_ablegen({"was": "heilen", "nr": n, "stufe": st,
+                                "zeit": int(time.time())}):
+                print("Der Waechter laeuft (Prozessnummer %d). Der Heilwunsch fuer Stick %d "
+                      "(%s) ist als Auftrag vorgemerkt: der Waechter fuehrt ihn im naechsten "
+                      "Durchlauf aus, spaetestens in %d Sekunden - mit seinen Bremsen "
+                      "(Sperre, Erholung, Abstand, Tagesgrenze). Das Ergebnis steht danach "
+                      "im Reiter Logdateien unter den Ereignissen."
+                      % (pid, n, g["name"], cfg["takt"]))
+                return 0
+            print("Der Waechter laeuft (Prozessnummer %d), aber der Auftrag liess sich "
+                  "nicht ablegen - bitte die Rechte an data/plugins pruefen." % pid)
+            return 1
+        text, buchung = von_hand_heilen(cfg, hist, systemgeraete(), argv[i + 1])
+        print(text)
+        if buchung:
+            # Unmittelbar vor dem Schreiben neu gelesen: zwischen Lesen und
+            # Schreiben lagen die Heilung und bis zu 30 s Wartezeit.
+            frisch = historie_lesen()
+            hand_buchen(frisch, cfg, buchung[0], buchung[1], buchung[2], buchung[3])
+            if not json_schreiben(pfade()["historie"], frisch):
+                print("ACHTUNG: historie.json liess sich nicht schreiben - der Versuch "
+                      "steht nicht im Verlauf.")
+                return 1
         return 0
 
     signal.signal(signal.SIGTERM, beenden)
@@ -1964,10 +2331,15 @@ def main():
                 % (", ".join(tabu) if tabu else "keine"), kb=cfg["log_kb"])
             letzte_tabu = tabu
         hist = historie_lesen()
-        auftraege_ausfuehren(hist, cfg, auftraege_holen())
+        auftraege_ausfuehren(hist, cfg, auftraege_holen(), tabu)
         neu = durchlauf(cfg, hist, tabu)
-        json_schreiben(p["historie"], hist)
-        json_schreiben(p["stand"], neu)
+        # U1: eine gescheiterte Schrift wird gesagt, nicht verschwiegen.
+        if not json_schreiben(p["historie"], hist):
+            log("historie.json liess sich nicht schreiben - Zaehler und Verlauf dieses "
+                "Durchlaufs fehlen.", "schreiben_historie", kb=cfg["log_kb"])
+        if not json_schreiben(p["stand"], neu):
+            log("stand.json liess sich nicht schreiben - Oberflaeche und Endpunkt zeigen "
+                "den vorigen Stand.", "schreiben_stand", kb=cfg["log_kb"])
         veroeffentlichen(cfg, neu)
         if einmal:
             return 0

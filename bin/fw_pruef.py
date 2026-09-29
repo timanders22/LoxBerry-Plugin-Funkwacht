@@ -50,6 +50,8 @@ Kompatibel mit Python 3.9 (LoxBerry 3) und 3.11 (Debian 12/13).
 
 from __future__ import annotations
 
+import re
+
 FASSUNG = "1.2.0"
 
 # Die Stufen, in der Reihenfolge ihrer Wucht.
@@ -82,6 +84,18 @@ SPERREN = ("", "anlaufzeit", "nachtruhe", "wartung", "global_aus")
 # Ab so vielen erfolglosen Versuchen gilt eine Stufe als taub - aber nur, wenn
 # der Haken "lernen" gesetzt ist UND danach noch eine andere Stufe kommt.
 TAUB_AB = 10
+
+# D5 (Pruefung 29.09.2026): Einheiten, die das Plugin nie neu startet -
+# DIESELBE Liste wie FW_EINHEIT_TABU in webfrontend/html/fw_lib.php. Ein
+# Eintrag mit * am Ende gilt als Anfang des Namens. Die sudo-Regel
+# "systemctl restart *" erlaubt jede Einheit; die Einschraenkung leistet
+# das Plugin, nicht sudo.
+EINHEIT_TABU = ("reboot", "poweroff", "halt", "shutdown", "kexec", "rescue",
+                "emergency", "ssh", "sshd", "apache2", "cron", "systemd-*", "dbus",
+                "mosquitto", "lbdefaults", "loxberry*")
+# Endungen, die keinen Dienst bezeichnen.
+EINHEIT_FREMDE_ARTEN = ("target", "socket", "mount", "automount", "swap", "path",
+                        "timer", "slice", "scope", "device")
 
 
 def vorgabe_geraet() -> dict:
@@ -147,6 +161,44 @@ def geraet_geradebiegen(roh: dict) -> dict:
     g["je_tag"] = int(max(0, min(50, zahl(g["je_tag"], 6))))
     g["port"] = int(max(0, min(99, zahl(g["port"], 0))))
     return g
+
+
+def einheit_pruefen(name) -> tuple:
+    """Einen systemd-Einheitennamen pruefen (D5).
+
+    Rueckgabe: (Einheit mit .service, "") oder ("", Grund). Erlaubt sind
+    [A-Za-z0-9@._-], kein fuehrendes -, die Endung .service oder keine
+    Endung - dann wird .service angehaengt. Dieselbe Rechnung wie
+    fw_einheit_pruefen() in fw_lib.php.
+    """
+    e = str(name or "")
+    if not e:
+        return "", "kein Name"
+    if not re.match(r"^[A-Za-z0-9@._\-]+$", e):
+        return "", "unerlaubte Zeichen (erlaubt: Buchstaben, Ziffern, @ . _ -)"
+    if e.startswith("-"):
+        return "", "beginnt mit einem Bindestrich"
+    if e.endswith(".service"):
+        basis = e[:-8]
+    else:
+        endung = e.rsplit(".", 1)[1] if "." in e else ""
+        if endung in EINHEIT_FREMDE_ARTEN:
+            return "", "die Endung .%s bezeichnet keinen Dienst" % endung
+        basis = e
+    if not basis:
+        return "", "kein Name"
+    vorn = basis.split("@", 1)[0].lower()
+    for t in EINHEIT_TABU:
+        if (vorn.startswith(t[:-1]) if t.endswith("*") else vorn == t):
+            return "", "Einheiten der Art '%s' startet die Funkwacht nie neu" % t
+    return basis + ".service", ""
+
+
+def container_pruefen(name) -> str:
+    """Einen Containernamen pruefen (D5). Rueckgabe: "" oder der Grund."""
+    if re.match(r"^[A-Za-z0-9][A-Za-z0-9_.\-]*$", str(name or "")):
+        return ""
+    return "kein gueltiger Containername"
 
 
 # ======================================================================
@@ -358,7 +410,7 @@ def darf_heilen(g: dict, verlauf: list, jetzt: float) -> tuple:
 
 def entscheiden(g: dict, alter_s, verlauf: list, bisher: int, jetzt: float,
                 schonzeit: bool = False, sperre: str = "",
-                statistik=None) -> dict:
+                statistik=None, letzter_versuch=None) -> dict:
     """Der ganze Entschluss in einem Aufruf.
 
     schonzeit  kurz nach dem Systemstart ist jede Datei alt und jedes Thema
@@ -380,8 +432,12 @@ def entscheiden(g: dict, alter_s, verlauf: list, bisher: int, jetzt: float,
         return dict(leer, grund=grund)
 
     # Erholung geht dem Urteil vor: unmittelbar nach einem Heilversuch ist
-    # Stille zu erwarten und kein Befund.
-    if in_erholung(g, verlauf, jetzt):
+    # Stille zu erwarten und kein Befund. letzter_versuch traegt den
+    # Zeitpunkt des letzten Versuchs ueber ein Quittieren hinweg (D7,
+    # Pruefung 29.09.2026): Quittieren loescht Alarm und Zaehler, nicht die
+    # laufende Erholungszeit - bis 1.0.8 folgte 60 s danach der naechste
+    # Neustart.
+    if in_erholung(g, verlauf or ([letzter_versuch] if letzter_versuch else []), jetzt):
         return dict(leer, grund="erholung")
 
     krank = {"ok": 0, "grund": grund, "aktion": 0, "danach": 0, "warum": ""}
@@ -462,6 +518,38 @@ def ist_systemgeraet(usb_pfad: str, system_pfade: list) -> bool:
         if u == s or u.startswith(s + ":") or u.startswith(s + ".") or s.startswith(u + ":"):
             return True
     return False
+
+
+def verteiler_sperre(hub, port, system_pfade: list) -> str:
+    """Darf Stufe 3 an diesem Verteiler schalten? Rueckgabe: "" oder der Grund.
+
+    D2 (Pruefung 29.09.2026): bis 1.0.8 galt die Systemgeraeteliste nur fuer
+    Stufe 2; Stufe 3 schaltete einem USB-Bootmedium den Strom weg. Abgewiesen
+    wird jetzt:
+    * der Wurzelverteiler allein (Kennung ohne '-', etwa "1" oder "2") - er
+      speist alle Anschluesse dieses Busses;
+    * hub und hub.port, wenn sie selbst oder darunter das System tragen;
+    * jeder Verteiler, unter dem IRGENDEIN Systemgeraet haengt - schaltet er
+      alle Anschluesse gemeinsam (ganged, Raspberry Pi 4), traefe jeder Port
+      auch die Systemplatte.
+    """
+    h = str(hub or "").strip()
+    if re.match(r"^[0-9]+$", h):
+        return "%s ist ein Wurzelverteiler - er speist alle Anschluesse" % h
+    if not re.match(r"^[0-9]+-[0-9]+(\.[0-9]+)*$", h):
+        return "'%s' sieht nicht wie eine Verteilerkennung aus (erwartet etwa 1-1)" % h
+    try:
+        ziel = "%s.%d" % (h, int(port))
+    except (TypeError, ValueError):
+        return "Anschluss '%s' ist keine Zahl" % port
+    if ist_systemgeraet(h, system_pfade) or ist_systemgeraet(ziel, system_pfade):
+        return "%s traegt das System (%s)" % (ziel, ", ".join(system_pfade))
+    for s in system_pfade or []:
+        s = str(s or "").strip()
+        if s and (s.startswith(h + ".") or s.startswith(h + ":")):
+            return ("am Verteiler %s haengt ein Geraet, auf dem das System liegt (%s)"
+                    % (h, s))
+    return ""
 
 
 # ======================================================================
@@ -689,6 +777,34 @@ def selbsttest() -> tuple:
     pr("ein Nachbarport ist frei", ist_systemgeraet("1-1.4", sys_pfade), False)
     pr("aehnlicher Anfang ist kein Treffer", ist_systemgeraet("1-1.10", sys_pfade), False)
     pr("leere Angabe ist kein Treffer", ist_systemgeraet("", sys_pfade), False)
+
+    # ---------- Stufe 3 gegen die Systemgeraete (D2) ----------
+    pr("der Wurzelverteiler allein wird abgewiesen",
+       verteiler_sperre("1", 1, []) != "", True)
+    pr("ein Port, der das System traegt, wird abgewiesen",
+       verteiler_sperre("1-1", 1, sys_pfade) != "", True)
+    pr("ein anderer Port am Verteiler mit dem System wird abgewiesen",
+       verteiler_sperre("1-1", 4, sys_pfade) != "", True)
+    pr("ein Verteiler ohne Systemgeraet ist frei", verteiler_sperre("1-3", 2, sys_pfade), "")
+
+    # ---------- Einheitennamen (D5) ----------
+    pr("ein Dienst ohne Endung bekommt .service",
+       einheit_pruefen("zigbee2mqtt"), ("zigbee2mqtt.service", ""))
+    pr("ein Dienst mit .service bleibt", einheit_pruefen("zwave-js-ui.service")[0],
+       "zwave-js-ui.service")
+    for name in ("reboot.target", "reboot", "apache2", "sshd.service", "systemd-logind",
+                 "loxberry-irgendwas", "-help", "ssh.socket", "a b", ""):
+        pr("abgewiesen: %r" % name, einheit_pruefen(name)[0], "")
+    vorlage = "getty@tty1"
+    pr("eine Vorlage mit @ ist zulaessig", einheit_pruefen(vorlage)[0], vorlage + ".service")
+    pr("ein Containername mit Punkt ist zulaessig", container_pruefen("z2m.1"), "")
+    pr("ein Containername mit fuehrendem Strich nicht", container_pruefen("-x") != "", True)
+
+    # ---------- Erholung nach dem Quittieren (D7) ----------
+    pr("nach dem Quittieren laeuft die Erholung weiter",
+       entscheiden(g, 900, [], 0, jetzt, letzter_versuch=jetzt - 60)["grund"], "erholung")
+    pr("danach wird wieder geurteilt",
+       entscheiden(g, 900, [], 0, jetzt, letzter_versuch=jetzt - 200)["aktion"], 1)
 
     # ---------- Eingaben geradebiegen ----------
     b = geraet_geradebiegen({"name": " Stick ", "hoechstalter": "abc", "ruhe_s": -5,

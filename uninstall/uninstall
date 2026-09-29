@@ -177,6 +177,10 @@ fi
 # Update - also auch das Deinstallieren, wenn es hier nicht steht.
 rm -f "$BASE/config/plugins/$PFOLDER.backup.json"
 rm -rf "$BASE/data/plugins/$PFOLDER.bestand"
+# S1 (Pruefung 29.09.2026): was postinstall.sh bei einer Neuinstallation
+# beiseitegelegt hat (.alt), und Reste eines abgebrochenen Sicherns (.neu).
+rm -f "$BASE/config/plugins/$PFOLDER.backup.json.alt" "$BASE/config/plugins/$PFOLDER.backup.json.neu"
+rm -rf "$BASE/data/plugins/$PFOLDER.bestand.alt" "$BASE/data/plugins/$PFOLDER.bestand.neu"
 # Die Upgrade-Marke liegt ebenfalls NEBEN dem Ordner. Bliebe sie liegen,
 # haette eine spaetere Neuinstallation eine fremde Marke vor sich - sie gilt
 # zwar nach 3600 s nicht mehr, aber liegenlassen ist kein Aufraeumen.

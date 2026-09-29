@@ -236,8 +236,40 @@ def zugang() -> dict:
         "host": host or "127.0.0.1",
         "port": int(fw_pruef.zahl(port or aus_lb("Brokerport", "brokerport"), 1883)),
         "user": str(c.get("broker_user") or "").strip() or aus_lb("Brokeruser", "brokeruser"),
-        "pass": str(c.get("broker_pass") or "").strip() or aus_lb("Brokerpass", "brokerpass"),
+        # U7 (Pruefung 29.09.2026): ein Kennwort wird nicht veraendert, auch
+        # nicht um Leerzeichen am Rand gekuerzt.
+        "pass": str(c.get("broker_pass") or "") or aus_lb("Brokerpass", "brokerpass"),
         "kennung": (str(c.get("broker_id") or "").strip() or "funkwacht-%d" % os.getpid())[:60],
+    }
+
+
+def zugang_gateway() -> dict:
+    """Der Broker des MQTT-Gateways - NUR aus general.json (M4).
+
+    Dorthin sendet der Waechter ueber den UDP-Eingang, dort liegen die
+    eigenen zurueckbehaltenen Themen. Abgeraeumt wird deshalb hier und nicht
+    am Broker, den die Felder des Mithoerers nennen; bis 1.0.8 raeumte die
+    Funkwacht mit einem eigenen Mithoerer-Broker nie ab (Pruefung 29.09.2026,
+    Befund mqtt 4).
+    """
+    g = json_lesen(pfade()["general"], {})
+    m = g.get("Mqtt") or g.get("mqtt") or {}
+
+    def aus_lb(*namen):
+        for n in namen:
+            if m.get(n) not in (None, ""):
+                return str(m.get(n))
+        return ""
+
+    host = aus_lb("Brokerhost", "brokerhost") or "127.0.0.1"
+    port = aus_lb("Brokerport", "brokerport")
+    if ":" in host and not port:
+        host, _, port = host.rpartition(":")
+    return {
+        "host": host or "127.0.0.1",
+        "port": int(fw_pruef.zahl(port, 1883)),
+        "user": aus_lb("Brokeruser", "brokeruser"),
+        "pass": aus_lb("Brokerpass", "brokerpass"),
     }
 
 
@@ -268,12 +300,19 @@ class Mithoerer:
     schliessen, .stand, .empfangen), damit main() unveraendert bleibt.
     """
 
-    def __init__(self, zug, muster, keepalive=60):
+    def __init__(self, zug, muster, keepalive=60, schreiben=True):
         self.zug = zug
         self.muster = list(muster)
         self.keepalive = keepalive
         self.klient = None
-        self.stand = {}
+        # M1 (Pruefung 29.09.2026): der Stand beginnt mit dem, was schon in
+        # mqtt_stand.json steht. Bis 1.0.8 begann er leer und ueberschrieb die
+        # Datei - ein stiller Stick galt nach jedem Neustart als "nie
+        # gesehen", und "nie gesehen heilt nicht".
+        # schreiben=False: der Probelauf (--probe) schreibt nichts.
+        self.schreiben = schreiben
+        self.stand = self.stand_laden() if schreiben else {}
+        self.geaendert = True        # #abonniert einmal ablegen (M3)
         self.empfangen = 0
         self.verbunden = False
         self.abbruch = None          # Grund, der kein Warten heilt
@@ -325,12 +364,21 @@ class Mithoerer:
             jetzt = time.time()
             self.empfangen += 1
             thema = m.topic
-            for muster in self.muster:
-                if thema_passt(muster, thema):
-                    self.stand[muster] = jetzt
             # Das konkrete Thema zusaetzlich ablegen: bei einem Platzhalter
             # sieht man in der Oberflaeche sonst nie, WAS wirklich ankam.
             self.stand["#letztes"] = thema
+            self.geaendert = True
+            # M2 (Pruefung 29.09.2026): eine zurueckbehaltene Zustellung
+            # (Retain-Bit: der Broker liefert beim Abonnieren den letzten
+            # Wert nach, auch den Letzten Willen "offline" eines seit Tagen
+            # toten Dienstes) und eine leere Nutzlast (ein Thema wird
+            # geloescht) sind KEIN Lebenszeichen. Live weitergereichte
+            # Nachrichten kommen mit Retain-Bit 0.
+            if m.retain or not m.payload:
+                return
+            for muster in self.muster:
+                if thema_passt(muster, thema):
+                    self.stand[muster] = jetzt
 
         def bei_trennung(*_a, **_k):
             self.verbunden = False
@@ -352,18 +400,78 @@ class Mithoerer:
         if not self.verbunden:
             raise OSError("Der Broker hat kein CONNACK geschickt.")
 
-    def stand_schreiben(self):
+    def stand_laden(self) -> dict:
+        """Die Zeitstempel aus mqtt_stand.json (M1) - nur Zahlen, ohne #-Eintraege."""
         p = pfade()
+        d = json_lesen(p["stand"], {}) if p["stand"] else {}
+        aus = {k: v for k, v in d.items()
+               if not str(k).startswith("#") and isinstance(v, (int, float))}
+        if isinstance(d.get("#letztes"), str):
+            aus["#letztes"] = d["#letztes"]
+        return aus
+
+    def stand_schreiben(self):
+        """Den Stand mit der Datei ZUSAMMENFUEHREN und schreiben (M1).
+
+        Je Thema gilt der neuere Zeitstempel; was in der Datei steht und hier
+        fehlt, bleibt stehen - ein leerer Stand ueberschreibt nie einen
+        vorhandenen. Dazu die abonnierte Liste unter #abonniert (M3), die der
+        Reiter Test gegen die Konfiguration haelt.
+        """
+        if not self.schreiben:
+            return True
+        p = pfade()
+        if not p["stand"]:
+            return False
+        tmp = "%s.tmp.%d" % (p["stand"], os.getpid())
         try:
             if not os.path.isdir(p["data"]):
                 os.makedirs(p["data"], exist_ok=True)
-            tmp = "%s.tmp.%d" % (p["stand"], os.getpid())
+            alt = json_lesen(p["stand"], {})
+            neu = {k: v for k, v in alt.items()
+                   if not str(k).startswith("#") and isinstance(v, (int, float))}
+            for k, v in self.stand.items():
+                if str(k).startswith("#") or not isinstance(v, (int, float)):
+                    continue
+                if v > neu.get(k, 0):
+                    neu[k] = v
+            letztes = self.stand.get("#letztes") or alt.get("#letztes")
+            if isinstance(letztes, str) and letztes:
+                neu["#letztes"] = letztes
+            neu["#abonniert"] = list(self.muster)
             with open(tmp, "w", encoding="utf-8") as f:
-                json.dump(self.stand, f, ensure_ascii=False, indent=1)
+                json.dump(neu, f, ensure_ascii=False, indent=1)
             os.replace(tmp, p["stand"])
+            self.geaendert = False
             return True
         except Exception:
+            try:
+                os.remove(tmp)
+            except OSError:
+                pass
             return False
+
+    def muster_nachziehen(self, neu):
+        """M3 (Pruefung 29.09.2026): eine geaenderte Themenliste abonnieren.
+
+        Bis 1.0.8 blieb der Mithoerer bis zum naechsten Neustart auf der alten
+        Liste; ein geaendertes Thema wurde nie abonniert, und der Stick stand
+        als "nie gesehen" da - ohne Heilung.
+        """
+        neu = list(neu)
+        if neu == self.muster:
+            return
+        weg = [m for m in self.muster if m not in neu]
+        dazu = [m for m in neu if m not in self.muster]
+        self.muster = neu
+        self.geaendert = True
+        if self.klient is not None and self.verbunden:
+            for m in weg:
+                self.klient.unsubscribe(m)
+            for m in dazu:
+                self.klient.subscribe(m)
+        log("Themenliste geaendert - abonniert: %s; abbestellt: %s"
+            % (", ".join(dazu) or "-", ", ".join(weg) or "-"))
 
     # -- Hauptschleife ------------------------------------------------
     def durchlauf(self, bis=None):
@@ -374,17 +482,34 @@ class Mithoerer:
         Abgebrochen wird nur, was kein Warten heilt - eine Abweisung.
         """
         letzte_datei = 0.0
+        letzte_pruefung = time.time()
+        cfg_zeit = self.cfg_zeit()
         while laeuft and (bis is None or time.time() < bis):
             if self.abbruch:
                 raise OSError(self.abbruch)
             time.sleep(0.2)
             jetzt = time.time()
+            # M3: alle fuenf Sekunden nachsehen, ob die Konfiguration sich
+            # geaendert hat (Aenderungszeit), und dann neu abonnieren.
+            if self.schreiben and jetzt - letzte_pruefung > 5:
+                letzte_pruefung = jetzt
+                z = self.cfg_zeit()
+                if z != cfg_zeit:
+                    cfg_zeit = z
+                    self.muster_nachziehen(themen())
             # Hoechstens alle fuenf Sekunden schreiben: die Datei liegt
             # unter data/ und damit auf der Platte, nicht auf der Ramdisk.
-            if self.stand and jetzt - letzte_datei > 5:
+            if self.geaendert and jetzt - letzte_datei > 5:
                 self.stand_schreiben()
                 letzte_datei = jetzt
         self.stand_schreiben()
+
+    @staticmethod
+    def cfg_zeit():
+        try:
+            return os.stat(pfade()["config"]).st_mtime
+        except (OSError, TypeError, ValueError):
+            return 0.0
 
     def schliessen(self):
         try:
@@ -545,7 +670,7 @@ def main():
     if probe:
         print("Broker %s:%d, Kennung %s" % (zug["host"], zug["port"], zug["kennung"]))
         print("Abonniert: %s" % ", ".join(m))
-        h = Mithoerer(zug, m)
+        h = Mithoerer(zug, m, schreiben=False)
         try:
             h.verbinden()
         except Exception as e:
@@ -575,7 +700,8 @@ def main():
     warte = 5
     log("gestartet, %d Thema/Themen: %s" % (len(m), ", ".join(m)))
     while laeuft:
-        h = Mithoerer(zug, m)
+        # M3: nach einem Abbruch mit der Liste, die JETZT gilt.
+        h = Mithoerer(zug, themen() or m)
         try:
             h.verbinden()
             log("verbunden mit %s:%d" % (zug["host"], zug["port"]))

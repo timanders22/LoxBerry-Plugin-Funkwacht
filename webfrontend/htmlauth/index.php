@@ -78,6 +78,20 @@ $fw_meldungen = array();
 $fw_fehler = array();
 $fw_testausgabe = '';
 $fw_post = (isset($_SERVER['REQUEST_METHOD']) ? $_SERVER['REQUEST_METHOD'] : '') === 'POST';
+/* U9: Knoepfe, die nichts speichern, melden ihr Scheitern in einer eigenen
+ * Liste - nicht unter "Nichts wurde gespeichert" (Regeln/04). */
+$fw_misslungen = array();
+
+/* U8: das Ergebnis des vorigen POST - NUR beim GET gelesen (Regeln/04). */
+if (!$fw_post) {
+    $fw_einmal = fw_einmal_lesen();
+    if ($fw_einmal) {
+        $fw_meldungen = $fw_einmal['meldungen'];
+        $fw_fehler = $fw_einmal['fehler'];
+        $fw_misslungen = $fw_einmal['misslungen'];
+        $fw_testausgabe = $fw_einmal['test'];
+    }
+}
 
 /* ---------------- Wachposten gegen fremde Formulare ----------------
  * EINE Pruefung, VOR allen Handlern. Einen einzelnen Handler kann man beim
@@ -98,7 +112,7 @@ if ($fw_post && isset($_POST['vorlage'])) {
     list($fw_name, $fw_inhalt) = ((string) $_POST['vorlage'] === 'vq')
         ? fw_vorlage_vo() : fw_vorlage();
     if ($fw_inhalt === '') {
-        $fw_fehler[] = fw_t('LOX.FEHLER_VORLAGE');
+        $fw_misslungen[] = fw_t('LOX.FEHLER_VORLAGE');
         $fw_tab = 'tab-loxone';
     } else {
         header('Content-Type: application/x-download');
@@ -114,7 +128,7 @@ if ($fw_post && isset($_POST['vorlage'])) {
 if ($fw_post && isset($_POST['sichern'])) {
     list($fw_name, $fw_inhalt) = fw_sicherung_bauen();
     if ($fw_inhalt === false) {
-        $fw_fehler[] = fw_t('SICH.FEHL');
+        $fw_misslungen[] = fw_t('SICH.FEHL');
         $fw_tab = 'tab-settings';
     } else {
         header('Content-Type: application/x-download');
@@ -132,17 +146,18 @@ $fw_sauber = function ($s) {
     return trim(preg_replace('/[\x00-\x1F\x7F"\']/', '', (string) $s));
 };
 $fw_zahl = function ($roh, $von, $bis, $bez) use (&$fw_fehler) {
-    /* Eine Zahl pruefen statt sie stillschweigend zurechtzubiegen. */
-    $roh = str_replace(',', '.', trim((string) $roh));
+    /* Eine Zahl pruefen statt sie stillschweigend zurechtzubiegen - mit
+     * derselben Pruefstelle wie das Zurueckspielen. Bis 1.0.8 wurde hier
+     * gerundet: 60.4 wurde still 60 (U6, Pruefung 29.09.2026). */
+    $roh = trim((string) $roh);
     if ($roh === '') { return null; }
-    if (!is_numeric($roh)) {
+    list($w, $grund) = fw_ganzzahl_pruefen($roh, $von, $bis);
+    if ($grund === 'keine_zahl') {
         $fw_fehler[] = sprintf(fw_t('FEHLER.KEINE_ZAHL'), $bez, $roh);
-        return null;
-    }
-    $w = (int) round((float) $roh);
-    if ($w < $von || $w > $bis) {
+    } elseif ($grund === 'keine_ganzzahl') {
+        $fw_fehler[] = sprintf(fw_t('FEHLER.KEINE_GANZZAHL'), $bez, $roh);
+    } elseif ($grund === 'ausserhalb') {
         $fw_fehler[] = sprintf(fw_t('FEHLER.AUSSERHALB'), $bez, $roh, $von, $bis);
-        return null;
     }
     return $w;
 };
@@ -198,62 +213,16 @@ if ($fw_post && isset($_POST['speichern_geraete'])) {
         $g['lernen']      = !empty($_POST['g_lernen'][$fw_i]) ? 1 : 0;
 
         $bez = fw_t('EINST.GERAET') . ' ' . ($fw_i + 1);
-        foreach (array(
-            'hoechstalter' => array('g_alter', 10, 86400),
-            'hoechststufe' => array('g_stufe', 0, 3),
-            'ruhe_s'       => array('g_ruhe', 10, 3600),
-            'abstand_s'    => array('g_abstand', 30, 86400),
-            'je_tag'       => array('g_tag', 0, 50),
-            'port'         => array('g_port', 0, 99),
-        ) as $fw_f => $fw_d) {
+        foreach (fw_geraet_zahlen() as $fw_f => $fw_d) {
             $w = $fw_zahl($fw_feld($fw_d[0], $fw_i), $fw_d[1], $fw_d[2],
                           $bez . ' / ' . fw_t('EINST.L_' . strtoupper($fw_f)));
             if ($w !== null) { $g[$fw_f] = $w; }
         }
 
-        $leer = ($g['name'] === '' && $g['pfad'] === '' && $g['thema'] === '');
-        if (!$leer) {
-            if ($g['name'] === '') {
-                $fw_fehler[] = sprintf(fw_t('FEHLER.NAME_FEHLT'), $fw_i + 1);
-            }
-            foreach (array(array($g['art'], $g['pfad'], $g['thema'], ''),
-                           array($g['art2'], $g['pfad2'], $g['thema2'], '2')) as $k) {
-                if ($k[0] === '') { continue; }
-                if ($k[0] === 'mqtt' && $k[2] === '') {
-                    $fw_fehler[] = sprintf(fw_t('FEHLER.THEMA_FEHLT'), $fw_i + 1);
-                }
-                if ($k[0] !== 'mqtt' && $k[1] === ''
-                    && !in_array($k[0], array('dienst', 'docker'), true)) {
-                    $fw_fehler[] = sprintf(fw_t('FEHLER.PFAD_FEHLT'), $fw_i + 1);
-                }
-            }
-            if ($g['art'] === 'dienst' && $g['pfad'] === '' && $g['dienst'] === '') {
-                $fw_fehler[] = sprintf(fw_t('FEHLER.DIENST_FEHLT'), $fw_i + 1);
-            }
-            if ($g['art'] === 'docker' && $g['pfad'] === '' && $g['container'] === '') {
-                $fw_fehler[] = sprintf(fw_t('FEHLER.CONTAINER_FEHLT'), $fw_i + 1);
-            }
-            if ($g['kennung'] !== '' && !preg_match('/^[0-9a-f]{4}:[0-9a-f]{4}$/', $g['kennung'])) {
-                $fw_fehler[] = sprintf(fw_t('FEHLER.KENNUNG'), $fw_i + 1, $g['kennung']);
-            }
-            /* Heilen ohne einen einzigen Hebel ist ein eingeschalteter
-             * Schalter, der nichts tut. Lieber jetzt sagen. */
-            if ($g['heilen'] && $g['hoechststufe'] > 0
-                && $g['dienst'] === '' && $g['container'] === ''
-                && $g['usb_pfad'] === '' && $g['hub'] === '') {
-                $fw_fehler[] = sprintf(fw_t('FEHLER.KEIN_HEBEL'), $fw_i + 1);
-            }
-            if ($g['hoechststufe'] >= 3 && ($g['hub'] === '' || $g['port'] <= 0)) {
-                $fw_fehler[] = sprintf(fw_t('FEHLER.UHUBCTL_UNVOLLSTAENDIG'), $fw_i + 1);
-            }
-            /* Die Erholungszeit laenger als der Mindestabstand hiesse: der
-             * Stick gilt bis zum naechsten erlaubten Versuch als gesund und
-             * es wird nie wieder geheilt. Melden, nicht zurechtbiegen. */
-            if ($g['ruhe_s'] >= $g['abstand_s']) {
-                $fw_fehler[] = sprintf(fw_t('FEHLER.RUHE_ZU_LANG'), $fw_i + 1,
-                                       $g['ruhe_s'], $g['abstand_s']);
-            }
-        }
+        /* Die Zusammenhaenge der Zeile - dieselbe Pruefstelle wie beim
+         * Zurueckspielen (fw_geraet_pruefen in fw_lib.php, U3), dazu der
+         * Dienst- und Containername (D5). */
+        $fw_fehler = array_merge($fw_fehler, fw_geraet_pruefen($g, $fw_i + 1));
         /* Durch dieselbe Normalisierung wie beim Lesen - und damit durch
          * genau EINE Stelle. Ohne sie stand in der Datei ein leerer Wert,
          * wo ein Auswahlfeld nicht mitgekommen war: gelesen wurde er zwar
@@ -264,10 +233,7 @@ if ($fw_post && isset($_POST['speichern_geraete'])) {
     }
     $fw_cfg['geraete'] = $fw_neu;
 
-    foreach (array('takt' => array('takt', 15, 3600),
-                   'anlauf_s' => array('anlauf_s', 0, 3600),
-                   'log_kb' => array('log_kb', 16, 20000),
-                   'verlauf_tage' => array('verlauf_tage', 1, 730)) as $fw_k => $fw_d) {
+    foreach (fw_betrieb_zahlen() as $fw_k => $fw_d) {
         $w = $fw_zahl(isset($_POST[$fw_d[0]]) ? $_POST[$fw_d[0]] : '',
                       $fw_d[1], $fw_d[2], fw_t('EINST.L_' . strtoupper($fw_k)));
         if ($w !== null) { $fw_cfg[$fw_k] = $w; }
@@ -313,8 +279,13 @@ if ($fw_post && isset($_POST['zeile_dazu'])) {
     } else {
         $fw_cfg['zeilen'] = count($fw_cfg['geraete']) + 1;
         $fw_cfg['geraete'][] = fw_geraet_vorgabe();
-        fw_config_speichern($fw_cfg);
-        $fw_meldungen[] = sprintf(fw_t('EINST.ZEILE_DAZU_OK'), $fw_cfg['zeilen']);
+        /* U5: die Wirkung melden - bis 1.0.8 kam die Erfolgsmeldung auch
+         * bei schreibgeschuetzter Konfiguration. */
+        if (fw_config_speichern($fw_cfg)) {
+            $fw_meldungen[] = sprintf(fw_t('EINST.ZEILE_DAZU_OK'), $fw_cfg['zeilen']);
+        } else {
+            $fw_fehler[] = fw_t('FEHLER.SPEICHERN');
+        }
     }
     $fw_tab = 'tab-settings';
 }
@@ -324,9 +295,12 @@ if ($fw_post && isset($_POST['zeile_leeren'])) {
     if (isset($fw_cfg['geraete'][$fw_i])) {
         $fw_name = $fw_cfg['geraete'][$fw_i]['name'];
         $fw_cfg['geraete'][$fw_i] = fw_geraet_vorgabe();
-        fw_config_speichern($fw_cfg);
-        fw_log('Zeile ' . ($fw_i + 1) . ' geleert (' . $fw_name . ').');
-        $fw_meldungen[] = sprintf(fw_t('EINST.ZEILE_LEER_OK'), $fw_i + 1);
+        if (fw_config_speichern($fw_cfg)) {
+            fw_log('Zeile ' . ($fw_i + 1) . ' geleert (' . $fw_name . ').');
+            $fw_meldungen[] = sprintf(fw_t('EINST.ZEILE_LEER_OK'), $fw_i + 1);
+        } else {
+            $fw_fehler[] = fw_t('FEHLER.SPEICHERN');
+        }
     }
     $fw_tab = 'tab-settings';
 }
@@ -349,11 +323,23 @@ if ($fw_post && isset($_POST['vorlage_setzen'])) {
             $g['name'] = fw_klartext($fw_alle[$fw_v]['text']);
         }
         foreach ($fw_alle[$fw_v]['werte'] as $k => $w) { $g[$k] = $w; }
+        /* Ohne einen einzigen Hebel (Dienst, Container, USB-Pfad, Verteiler)
+         * kann die Zeile nicht heilen - dann Heilen aus, sonst beanstandet die
+         * eigene Pruefung (FEHLER.KEIN_HEBEL) die Zeile, und die Sicherung
+         * liesse sich nicht mehr zurueckspielen (Vorlage "seriell",
+         * Pruefung 29.09.2026). Eine Zeile MIT Hebel bleibt unberuehrt. */
+        if ((string) $g['dienst'] === '' && (string) $g['container'] === ''
+            && (string) $g['usb_pfad'] === '' && (string) $g['hub'] === '') {
+            $g['heilen'] = 0;
+        }
         $fw_cfg['geraete'][$fw_i] = fw_geraet_geradebiegen($g);
-        fw_config_speichern($fw_cfg);
-        $fw_meldungen[] = sprintf(fw_t('VORL.GESETZT'), $fw_i + 1,
-                                  fw_klartext($fw_alle[$fw_v]['text']));
-        $fw_meldungen[] = fw_t('VORL.PRUEFEN');
+        if (fw_config_speichern($fw_cfg)) {
+            $fw_meldungen[] = sprintf(fw_t('VORL.GESETZT'), $fw_i + 1,
+                                      fw_klartext($fw_alle[$fw_v]['text']));
+            $fw_meldungen[] = fw_t('VORL.PRUEFEN');
+        } else {
+            $fw_fehler[] = fw_t('FEHLER.SPEICHERN');
+        }
     }
     $fw_tab = 'tab-settings';
 }
@@ -361,6 +347,10 @@ if ($fw_post && isset($_POST['vorlage_setzen'])) {
 /* ---------------- Speichern: MQTT ---------------- */
 if ($fw_post && isset($_POST['speichern_mqtt'])) {
     $fw_cfg = fw_config();
+    /* M5: das bisherige Praefix und der bisherige Schalter - wechselt das
+     * Praefix oder geht MQTT aus, raeumt der Waechter darunter ab. */
+    $fw_alt_praefix = (string) $fw_cfg['mqtt_topic'];
+    $fw_alt_ein = (int) $fw_cfg['mqtt_ein'];
     $fw_cfg['mqtt_ein'] = !empty($_POST['mqtt_ein']) ? 1 : 0;
     $fw_thema = strtolower($fw_sauber(isset($_POST['mqtt_topic']) ? $_POST['mqtt_topic'] : ''));
     $fw_thema = trim($fw_thema, '/');
@@ -388,13 +378,31 @@ if ($fw_post && isset($_POST['speichern_mqtt'])) {
     if (!empty($_POST['broker_pass_weg'])) {
         $fw_cfg['broker_pass'] = '';
     } elseif (trim($fw_bpw) !== '') {
-        $fw_cfg['broker_pass'] = $fw_sauber($fw_bpw);
+        /* U7 (Pruefung 29.09.2026): ein Kennwort wird NIE veraendert. Bis
+         * 1.0.8 entfernte $fw_sauber Anfuehrungszeichen - aus geheim"123
+         * wurde geheim123, und der Mithoerer meldete sich mit dem falschen
+         * an. Anfuehrungszeichen und Leerzeichen traegt der Weg zum Broker
+         * (paho 1.6.1 gemessen, proben/u7); abgewiesen werden nur
+         * Steuerzeichen. */
+        if (fw_steuerzeichen($fw_bpw)) {
+            $fw_fehler[] = fw_t('FEHLER.KENNWORT_ZEICHEN');
+        } else {
+            $fw_cfg['broker_pass'] = $fw_bpw;
+        }
     }
     if (!$fw_fehler) {
         if (fw_config_speichern($fw_cfg)) {
             $fw_meldungen[] = fw_t('ALLG.GESPEICHERT');
             $fw_meldungen[] = fw_t('MQTT.NEUSTART_NOETIG');
             fw_log('MQTT-Einstellungen gespeichert.');
+            if ($fw_alt_praefix !== '' && ($fw_cfg['mqtt_topic'] !== $fw_alt_praefix
+                                           || ($fw_alt_ein && !$fw_cfg['mqtt_ein']))) {
+                if (fw_altpraefix_merken($fw_alt_praefix)) {
+                    $fw_meldungen[] = sprintf(fw_t('MQTT.ALT_ABRAEUMEN'), $fw_alt_praefix);
+                } else {
+                    $fw_misslungen[] = sprintf(fw_t('MQTT.ALT_FEHL'), $fw_alt_praefix);
+                }
+            }
         } else {
             $fw_fehler[] = fw_t('FEHLER.SPEICHERN');
         }
@@ -414,8 +422,27 @@ if ($fw_post && isset($_POST['zurueckspielen'])) {
         $fw_fehler[] = fw_t('SICH.KEINE_DATEI');
     } else {
         $fw_roh = (string) @file_get_contents($_FILES['sicherungsdatei']['tmp_name']);
-        list($fw_ok, $fw_text) = fw_sicherung_lesen($fw_roh);
-        if ($fw_ok) { $fw_meldungen[] = $fw_text; } else { $fw_fehler[] = $fw_text; }
+        list($fw_ok, $fw_text, $fw_liste) = fw_sicherung_lesen($fw_roh);
+        if ($fw_ok) {
+            $fw_meldungen[] = $fw_text;
+            /* U10: den Waechter nachziehen und sagen, was geschah. Er liest
+             * die Konfiguration zwar in jedem Durchlauf neu, der Mithoerer
+             * aber nicht die Broker-Angaben. */
+            if (fw_dienst_pid() > 0) {
+                list($fw_ok2, $fw_text2) = fw_dienst_schalten('restart');
+                if ($fw_ok2) {
+                    $fw_meldungen[] = sprintf(fw_t('SICH.DIENST_NEU'), fw_dienst_pid());
+                } else {
+                    $fw_misslungen[] = sprintf(fw_t('SICH.DIENST_FEHL'), $fw_text2);
+                }
+                fw_log('Nach dem Zurueckspielen: Waechter neu gestartet -> ' . ($fw_ok2 ? 'ok' : 'fehl'));
+            } else {
+                $fw_meldungen[] = fw_t('SICH.DIENST_LIEF_NICHT');
+            }
+        } else {
+            $fw_fehler[] = $fw_text;
+            foreach ($fw_liste as $fw_z) { $fw_fehler[] = $fw_z; }
+        }
     }
     $fw_tab = 'tab-settings';
 }
@@ -427,10 +454,13 @@ if ($fw_post && isset($_POST['token_neu']) && empty($_POST['sicher_token'])) {
 } elseif ($fw_post && isset($_POST['token_neu'])) {
     $fw_cfg = fw_config();
     $fw_cfg['aktionstoken'] = fw_token_erzeugen();
-    fw_config_speichern($fw_cfg);
-    $fw_merkmal = fw_formtoken();   // das Merkmal haengt daran und wechselt mit
-    $fw_meldungen[] = fw_t('LOX.TOKEN_NEU_OK');
-    fw_log('Neues Wortzeichen erzeugt.');
+    if (fw_config_speichern($fw_cfg)) {
+        $fw_merkmal = fw_formtoken();   // das Merkmal haengt daran und wechselt mit
+        $fw_meldungen[] = fw_t('LOX.TOKEN_NEU_OK');
+        fw_log('Neues Wortzeichen erzeugt.');
+    } else {
+        $fw_fehler[] = fw_t('FEHLER.SPEICHERN');
+    }
     $fw_tab = 'tab-loxone';
 }
 
@@ -443,7 +473,7 @@ if ($fw_post && isset($_POST['dienst'])) {
         $fw_meldungen[] = sprintf(fw_t('DIENST.OK'),
             fw_t('DIENST.' . strtoupper((string) $_POST['dienst'])));
     } else {
-        $fw_fehler[] = sprintf(fw_t('DIENST.FEHL'),
+        $fw_misslungen[] = sprintf(fw_t('DIENST.FEHL'),
             fw_t('DIENST.' . strtoupper((string) $_POST['dienst'])), $fw_text);
     }
     fw_log('Waechter geschaltet: ' . (string) $_POST['dienst'] . ' -> ' . ($fw_ok ? 'ok' : 'fehl'));
@@ -455,9 +485,10 @@ if ($fw_post && isset($_POST['quittieren'])) {
     $fw_nr = (int) $_POST['quittieren'];
     if (fw_auftrag('quittieren', $fw_nr)) {
         $fw_meldungen[] = sprintf(fw_t('AUFTR.QUITTIERT'),
-            $fw_nr ? ('Stick ' . $fw_nr) : fw_t('AUFTR.ALLE'), fw_auftrag_wartezeit());
+            $fw_nr ? sprintf(fw_t('AUFTR.STICK'), $fw_nr) : fw_t('AUFTR.ALLE'),
+            fw_auftrag_wartezeit());
     } else {
-        $fw_fehler[] = fw_t('AUFTR.FEHL');
+        $fw_misslungen[] = fw_t('AUFTR.FEHL');
     }
     $fw_tab = 'tab-test';
 }
@@ -468,7 +499,7 @@ if ($fw_post && isset($_POST['wartung'])) {
             ? sprintf(fw_t('AUFTR.WARTUNG_EIN'), $fw_dauer, fw_auftrag_wartezeit())
             : sprintf(fw_t('AUFTR.WARTUNG_AUS'), fw_auftrag_wartezeit());
     } else {
-        $fw_fehler[] = fw_t('AUFTR.FEHL');
+        $fw_misslungen[] = fw_t('AUFTR.FEHL');
     }
     $fw_tab = 'tab-test';
 }
@@ -478,16 +509,23 @@ if ($fw_post && isset($_POST['statistik_weg'])) {
     } elseif (fw_auftrag('statistik_zuruecksetzen')) {
         $fw_meldungen[] = sprintf(fw_t('AUFTR.STATISTIK'), fw_auftrag_wartezeit());
     } else {
-        $fw_fehler[] = fw_t('AUFTR.FEHL');
+        $fw_misslungen[] = fw_t('AUFTR.FEHL');
     }
     $fw_tab = 'tab-test';
 }
 
 /* ---------------- Protokoll leeren ---------------- */
 if ($fw_post && isset($_POST['log_leeren'])) {
-    @file_put_contents($fw_p['log'], '');
-    fw_log('Protokoll geleert.');
-    $fw_meldungen[] = fw_t('LOG.GELEERT');
+    /* U11: die Wirkung pruefen - bis 1.0.8 hiess es "geleert", auch wenn
+     * das Schreiben scheiterte. */
+    $fw_leer_ok = $fw_p['log'] !== '' && @file_put_contents($fw_p['log'], '') !== false;
+    clearstatcache(true, $fw_p['log']);
+    if ($fw_leer_ok && is_file($fw_p['log']) && filesize($fw_p['log']) === 0) {
+        fw_log('Protokoll geleert.');
+        $fw_meldungen[] = fw_t('LOG.GELEERT');
+    } else {
+        $fw_misslungen[] = sprintf(fw_t('LOG.LEEREN_FEHL'), $fw_p['log']);
+    }
     $fw_tab = 'tab-log';
 }
 
@@ -504,6 +542,23 @@ if ($fw_post && isset($_POST['test'])) {
     }
     $fw_testausgabe = fw_test_ausfuehren((string) $_POST['test'], $fw_wert);
     $fw_tab = 'tab-test';
+}
+
+/* ---------------- Nach dem POST: umleiten (U8) ----------------
+ * Regeln/04: jeder POST-Handler endet mit 303 auf index.php?form=<reiter>,
+ * das Ergebnis reist als Einmalmeldung. Bis 1.0.8 wurde direkt nach dem
+ * POST gerendert; F5 wiederholte jede Handlung (Zeilen 8 -> 9 -> 10, zwei
+ * Quittier-Auftraege, zweiter Heilversuch), und nach dem Zurueckspielen
+ * trug die Seite noch das alte Formularmerkmal (U4). Downloads haben
+ * oben schon mit exit geantwortet. Scheitert die Einmalmeldung, wird
+ * ohne Umleitung gerendert und das gesagt. Ein vom Wachposten
+ * abgewiesenes Formular hat nichts ausgeloest und rendert direkt. */
+if ($fw_post) {
+    if (fw_einmal_schreiben($fw_meldungen, $fw_fehler, $fw_misslungen, $fw_testausgabe)) {
+        header('Location: index.php?form=' . rawurlencode(substr($fw_tab, 4)), true, 303);
+        exit;
+    }
+    $fw_misslungen[] = fw_t('ALLG.EINMAL_FEHL');
 }
 
 /* ================= Werte fuer die Anzeige ================= */
@@ -660,6 +715,9 @@ if ($fw_rahmen) {
 <?php } ?>
 <?php if ($fw_fehler) { ?>
 <div class="sm-warnung"><b><?= fw_e(fw_t('ALLG.BEANSTANDUNG')) ?></b><br><?= implode('<br>', array_map('fw_e', $fw_fehler)) ?></div>
+<?php } ?>
+<?php if ($fw_misslungen) { ?>
+<div class="sm-warnung"><b><?= fw_e(fw_t('ALLG.MISSLUNGEN')) ?></b><br><?= implode('<br>', array_map('fw_e', $fw_misslungen)) ?></div>
 <?php } ?>
 
 <div class="sm-kacheln">

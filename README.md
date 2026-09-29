@@ -4,10 +4,62 @@
 Merkt, wenn ein Stick verstummt, weckt ihn in Stufen wieder auf — und misst
 nach, ob es geholfen hat.
 
-Version 1.0.7 · LoxBerry ab 3.0 · PHP 7.4 und 8.x · Python 3 mit paho-mqtt
+Version 1.0.8 · LoxBerry ab 3.0 · PHP 7.4 und 8.x · Python 3 mit paho-mqtt
 (Debian-Paket, über `dpkg/apt`)
 
 ---
+
+## Neu in 1.0.8
+
+Durchsicht vom 29.09.2026 mit vier Prüfern (Code, Oberfläche, Installer, MQTT); jeder Punkt ist gemessen und hat eine
+Gegenprobe, die an 1.0.7 rot und an 1.0.8 grün ist.
+
+**Heilen trifft nur noch den richtigen Stick.**
+- Vor dem Aus- und Einhängen (Stufe 2) und vor dem Stromschalten (Stufe 3) prüft der Wächter, ob am Anschluss wirklich
+  der erwartete Stick steckt. Bisher meldete er „an diesem Anschluss steckt ein anderes Gerät“ und setzte es trotzdem
+  zurück — nach einem Umstecken traf das den Z-Wave-Stick oder eine Datenplatte.
+- Stufe 3 schaltet keinen Verteiler mehr, an dem das System hängt, und nie den Wurzelverteiler. Das Systemgerät wird
+  auch dann erkannt, wenn `/proc/mounts` nur `/dev/root` nennt.
+- Dienst- und Containernamen werden geprüft, bevor sie an `sudo` gehen: `reboot.target`, Systemdienste des LoxBerry und
+  Namen mit führendem `-` werden abgewiesen.
+- Eine Heilung von Hand läuft über den Wächter, wenn er läuft, mit seinen Bremsen und seiner Historie — bisher konnte sie
+  60 s später einen zweiten Neustart auslösen und die Historie überschreiben.
+- Quittieren löscht die Erholungszeit nicht mehr.
+
+**Mithörer (MQTT-Sticks).**
+- Nach einem Neustart weiß er wieder, wann ein Thema zuletzt kam. Bisher begann er leer, und ein toter Stick wurde nie
+  mehr geheilt, nur gemeldet.
+- Zurückbehaltene und leere Nachrichten zählen nicht als Lebenszeichen. Die Vorlage „Zigbee2MQTT über MQTT“ hört deshalb
+  auf `zigbee2mqtt/bridge/health` (Zigbee2MQTT meldet sich dort alle 10 Minuten) statt auf `bridge/state`, das nur bei
+  einer Änderung kommt.
+- Ein neues oder geändertes Thema wird ohne Neustart abonniert; der Reiter Test vergleicht die Abonnements mit der
+  Konfiguration.
+
+**MQTT.**
+- Abgeräumt wird am Broker des Gateways, auch wenn der Mithörer einen eigenen Broker benutzt.
+- Nach einem Wechsel des Präfixes oder wenn MQTT ausgeschaltet wird, werden die Themen unter dem alten Präfix abgeräumt.
+- Es gehen nur Änderungen hinaus, der volle Satz beim Start und alle 30 Minuten.
+- `warum` und `bemerkung` gehen nach der Erholung als `-` hinaus, statt stehen zu bleiben.
+- Eine abgewiesene Anmeldung wird im Klartext gemeldet.
+
+**Oberfläche.**
+- Nach jedem Absenden wird umgeleitet; F5 wiederholt nichts mehr.
+- Das Zurückspielen einer Sicherung prüft jeden Wert wie das Formular. Bisher wurde ein Token als Liste zum Wort
+  `Array`, mit dem jeder im Netz quittieren konnte, und eine Geräteliste als Objekt legte Oberfläche und Endpunkt still.
+  Nach dem Zurückspielen wird der Wächter nachgezogen.
+- Zahlen werden nicht mehr still gerundet, das Broker-Kennwort wird nicht mehr verändert.
+- Ein Speichern, das nicht gelingt, wird gemeldet, statt als Erfolg zu erscheinen.
+- Bei voller Speicherkarte gehen die Einstellungen nicht mehr verloren: Geschrieben ist erst, was ganz geschrieben ist.
+- PHP 8.5 meldet keine Verfallswarnung mehr.
+
+**Installation.**
+- Ein Update überschreibt die Zweitschrift nicht mehr mit einer kaputten Konfiguration.
+- Eine Neuinstallation spielt keine Einstellungen und keinen Bestand einer früheren Installation mehr ein: Sie werden als
+  `.alt` beiseitegelegt und genannt; die Deinstallation räumt sie ab.
+- Konfiguration und Zweitschrift stehen immer auf 0600.
+- Die Rechtedatei sagt ehrlich, was sie erlaubt: jede Einheit und jeden Container. Die Einschränkung auf sinnvolle Namen
+  leistet das Plugin. `uhubctl` ohne Argumente ist nur noch zum Abfragen freigegeben.
+- Fehler des Minutentakts stehen in `cron.err`.
 
 ## Neu in 1.0.7
 

@@ -18,8 +18,32 @@
 #
 # Mehrere Kandidaten je Werkzeug, weil /bin und /usr/bin auf Debian 12
 # zusammengelegt sind, auf aelteren Systemen aber nicht. sudo loest den
-# Befehl ueber PATH auf und vergleicht dann den vollstaendigen Pfad; ein
-# Eintrag ohne Argumente erlaubt AUCH NUR den Aufruf ohne Argumente.
+# Befehl ueber PATH auf und vergleicht dann den vollstaendigen Pfad.
+#
+# BERICHTIGT nach der Pruefung vom 29.09.2026 (I6, D5): ein Eintrag OHNE
+# Argumente erlaubt JEDE Argumentliste (sudoers(5): "If no command line
+# arguments are specified, the user may run the command with any arguments
+# they choose"); nur "" heisst "ohne Argumente". Am Geraet gemessen: mit den
+# bis 1.0.8 blossen uhubctl-Zeilen war "sudo -n -l /usr/sbin/uhubctl -f -a
+# off" fuer loxberry ERLAUBT.
+#
+# WAS DIESE REGELN BEGRENZEN - ehrlich gesagt: fast nichts.
+# "systemctl restart *" erlaubt jede Einheit, auch reboot.target, und gibt
+# nichts, was LoxBerry nicht schon gibt: nach /etc/sudoers.d/lbdefaults darf
+# loxberry /bin/systemctl ohnehin ohne Kennwort und mit beliebigen
+# Argumenten ausfuehren, dazu apt-get, dpkg und reboot (am Geraet gemessen,
+# Regeln/06). docker, uhubctl und tee stehen dort nicht; diese Zeilen geben
+# also etwas dazu: "docker restart *" jeden Container, und in
+# "uhubctl -l * -p * -a *" passt "*" auch auf Leerzeichen, also auf
+# angehaengte Argumente.
+# Die Einschraenkung auf sinnvolle Namen leistet das Plugin, unmittelbar vor
+# jedem sudo-Aufruf: fw_pruef.einheit_pruefen(), container_pruefen() und
+# verteiler_sperre() im Waechter, fw_einheit_pruefen() und
+# fw_container_pruefen() in der Oberflaeche. Das schuetzt vor Fehlbedienung
+# (ein vertippter Dienstname, reboot.target in der falschen Zeile), nicht vor
+# jemandem, der als loxberry eigene Befehle absetzen kann. Ein root-eigenes
+# Hilfsskript mit fester Liste war geplant und ist aus diesem Grund
+# entfallen (Entscheidung des Hausherrn, 29.09.2026).
 #
 # Geprueft vor der Auslieferung mit visudo -c -f (am Geraet: parsed OK).
 loxberry ALL=(root) NOPASSWD: /bin/systemctl restart *
@@ -34,10 +58,10 @@ loxberry ALL=(root) NOPASSWD: /usr/local/bin/uhubctl -l * -p * -a *
 # wichtigste Knopf des Plugins ohne Rechte gefragt und im Zweifel gemeldet,
 # kein Verteiler koenne Portstrom. Ein rotes Kreuz, das nichts bedeutet, ist
 # schlimmer als keine Pruefung. Der Aufruf ohne Argumente SCHALTET NICHTS: er
-# liest nur.
-loxberry ALL=(root) NOPASSWD: /usr/sbin/uhubctl
-loxberry ALL=(root) NOPASSWD: /usr/bin/uhubctl
-loxberry ALL=(root) NOPASSWD: /usr/local/bin/uhubctl
+# liest nur - und "" beschraenkt die Zeilen auf genau diesen Aufruf.
+loxberry ALL=(root) NOPASSWD: /usr/sbin/uhubctl ""
+loxberry ALL=(root) NOPASSWD: /usr/bin/uhubctl ""
+loxberry ALL=(root) NOPASSWD: /usr/local/bin/uhubctl ""
 loxberry ALL=(root) NOPASSWD: /usr/bin/tee /sys/bus/usb/drivers/usb/unbind
 loxberry ALL=(root) NOPASSWD: /usr/bin/tee /sys/bus/usb/drivers/usb/bind
 loxberry ALL=(root) NOPASSWD: /bin/tee /sys/bus/usb/drivers/usb/unbind

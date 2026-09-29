@@ -249,7 +249,9 @@ start_p() {
         printf '%s\n' "$fw_l" | head -n 1 > "$1" 2>/dev/null
         return 0
     fi
-    nohup "$PY" "$PBIN/$2" >> "$LOG/$3" 2>&1 &
+    # 8<&-: der Griff der Startsperre (siehe "start") wird NICHT vererbt,
+    # sonst hielte der Dienst die Sperre, solange er laeuft.
+    nohup "$PY" "$PBIN/$2" >> "$LOG/$3" 2>&1 8<&- &
     echo $! > "$1"
     sleep 1
     # Die Wirkung pruefen, nicht den Rueckgabewert: nohup meldet Erfolg,
@@ -331,6 +333,17 @@ mithoerer_noetig() {
 
 case "$1" in
     start)
+        # Startsperre (D4, Pruefung 29.09.2026): zwei gleichzeitige "start"
+        # (Minutentakt und Knopf) ergaben in 12 von 20 Runden zwei Waechter.
+        # Bauart wie Einspeisebremse 0.9.28 (bin/dienst.sh): Griff 8 auf diese
+        # Datei, flock mit 15 s Wartezeit; der Griff endet mit diesem Aufruf
+        # und geht an die Dienste nicht mit (8<&- in start_p). Ohne flock wie
+        # bisher. KEINE Sperre im Python-Dienst: sie erbten der Mithoerer und
+        # jeder Befehl, den der Waechter startet.
+        if command -v flock >/dev/null 2>&1; then
+            exec 8<"$0"
+            flock -w 15 8 || { echo "Ein anderer Start laeuft noch - abgebrochen."; exit 1; }
+        fi
         if upgrade_laeuft; then
             # Kein Fehler: der Takt darf sich nicht beschweren, und
             # postinstall.sh startet gleich selbst.

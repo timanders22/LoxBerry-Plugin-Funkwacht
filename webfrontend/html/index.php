@@ -37,12 +37,19 @@ header('Content-Type: text/plain; charset=utf-8');
 header('Cache-Control: no-store');
 
 $fw_cfg = fw_config(false);          // NUR lesen - siehe Kopf
-$fw_soll = (string) $fw_cfg['aktionstoken'];
-$fw_ist = isset($_GET['token']) ? (string) $_GET['token'] : '';
-if ($fw_soll === '') {
+$fw_soll = $fw_cfg['aktionstoken'];
+$fw_ist = isset($_GET['token']) && is_string($_GET['token']) ? $_GET['token'] : '';
+/* Der Schutz faellt GESCHLOSSEN aus (U3, Pruefung 29.09.2026): ein
+ * gespeichertes Token, das keine Zeichenkette in der Form ist, die dieses
+ * Plugin erzeugt, gilt wie "kein Token gesetzt". Bis 1.0.8 wurde aus einem
+ * zurueckgespielten ["x"] mit (string) das Wort Array - und jeder im Netz
+ * konnte mit token=Array quittieren und die Wartung schalten. */
+if (!fw_token_gueltig($fw_soll)) {
     http_response_code(403);
     echo "FEHLER;OK=0;GRUND=KEIN_TOKEN_GESETZT\n";
-    echo "Die Plugin-Oberflaeche wurde noch nie geoeffnet - es gibt noch kein Wortzeichen.\n";
+    echo ($fw_soll === ''
+        ? "Die Plugin-Oberflaeche wurde noch nie geoeffnet - es gibt noch kein Wortzeichen.\n"
+        : "Das gespeicherte Wortzeichen hat nicht die Form, die das Plugin erzeugt - bitte in der Oberflaeche ein neues erzeugen.\n");
     exit;
 }
 if (!hash_equals($fw_soll, $fw_ist)) {

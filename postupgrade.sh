@@ -93,5 +93,20 @@ if [ -f "$MARKE" ]; then
 fi
 
 echo "<OK> postupgrade abgeschlossen - beim naechsten Durchlauf wird frisch gemessen."
-echo "<INFO> Zaehler und Verlauf wurden ueber die Aktualisierung gerettet."
+# I4 (Pruefung 29.09.2026): die Schlusszeile nur nach NACHGESEHENEM
+# Zurueckholen - postinstall.sh legt den Merker erst an, wenn jede Datei
+# verglichen angekommen ist. Bis 1.0.8 stand sie immer da, auch direkt unter
+# "Der Bestand konnte nicht gesichert werden" (Befund Installer 4).
+# I3: danach wird die Sicherung weggeraeumt.
+MERK="$BASE/data/plugins/$PFOLDER/bestand_zurueckgeholt"
+BEST="$BASE/data/plugins/$PFOLDER.bestand"
+if [ -f "$MERK" ]; then
+    WAS=$(cat "$MERK" 2>/dev/null)
+    rm -f "$MERK"
+    echo "<INFO> Zaehler und Verlauf wurden ueber die Aktualisierung gerettet:$WAS"
+    rm -rf "$BEST" 2>/dev/null
+    if [ -d "$BEST" ]; then
+        echo "<WARNING> Die Sicherung $BEST liess sich nicht wegraeumen."
+    fi
+fi
 exit 0

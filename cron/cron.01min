@@ -11,6 +11,7 @@
 # (plugininstall.pl, sub replaceenv). Bleibt er stehen - etwa beim Lauf aus
 # einem entpackten Archiv -, greift der Rueckfall.
 DIENST="REPLACELBPBINDIR/dienst.sh"
+LOGD="REPLACELBPLOGDIR"
 case "$DIENST" in
     REPLACE*)
         # Nicht vom Installer eingebaut (ausgepacktes Archiv, Pruefordner):
@@ -23,7 +24,21 @@ case "$DIENST" in
             exit 1
         fi
         DIENST="$LBHOMEDIR/bin/plugins/$LBPPLUGINDIR/dienst.sh"
+        LOGD="$LBHOMEDIR/log/plugins/$LBPPLUGINDIR"
         ;;
 esac
 [ -x "$DIENST" ] || exit 0
-exec "$DIENST" start >/dev/null 2>&1
+# I7 (Pruefung 29.09.2026): die FEHLERAUSGABE geht nach cron.err, nicht nach
+# /dev/null (Hausstandard, Regeln/06; Bauart Abfahrtsassistent 1.6.16 und
+# Docker NG 1.3.9). Scheitert "dienst.sh start" vor dem Python-Start, stand
+# das bis 1.0.8 nirgends. Das Verzeichnis wird vorher angelegt, sonst
+# scheitert schon die Umlenkung; touch frischt die Aenderungszeit auf, sonst
+# raeumt die Logwartung die Datei weg; ueber 256 kB wird sie gekappt, denn
+# log/ liegt im Arbeitsspeicher.
+ERR="$LOGD/cron.err"
+mkdir -p "$LOGD" 2>/dev/null
+if [ -f "$ERR" ] && [ "$(stat -c %s "$ERR" 2>/dev/null || echo 0)" -gt 262144 ]; then
+    tail -n 300 "$ERR" > "$ERR.neu" 2>/dev/null && mv -f "$ERR.neu" "$ERR"
+fi
+touch "$ERR" 2>/dev/null
+exec "$DIENST" start >/dev/null 2>>"$ERR"

@@ -85,13 +85,67 @@ chmod 700 "$PCONFIG" 2>/dev/null
 [ -f "$PCONFIG/funkwacht.json" ] || echo '{}' > "$PCONFIG/funkwacht.json"
 chmod 600 "$PCONFIG/funkwacht.json" 2>/dev/null
 
-# Sicherung zurueckspielen (uebersteht Update UND Neuinstallation)
+# ---------- Aktualisierung oder Neuinstallation? ----------
+# S1 (Pruefung 29.09.2026, Entscheidung 1 des Hausherrn): aus Zweitschrift
+# und Bestand wird NUR bei einer Aktualisierung zurueckgespielt - erkannt an
+# der Marke aus preupgrade.sh. Bis
+# 1.0.8 spielte auch eine Neuinstallation ein, was eine fruehere Installation
+# neben dem Ordner liegen liess (Befund Installer 3: geheilt_gesamt 99 aus
+# einer Sicherung vom 01.06.2026; die Zweitschrift brachte Sticks und
+# Aktionstoken einer laengst deinstallierten Anlage zurueck).
+MARKE="$BASE/data/plugins/$PFOLDER.upgrade_laeuft"
+# Entschieden wird am VORHANDENSEIN der Marke, nicht an ihrem Alter
+# (praezisiert 29.09.2026): mit Altersgrenze galt ein Update, bei dem
+# zwischen preupgrade und postinstall mehr als eine Stunde lag, als
+# Neuinstallation, und die Konfiguration landete in .alt (Fall U4). Die
+# 3600 s gelten nur fuer die Startsperre in bin/dienst.sh. Die Marke
+# entfernt postupgrade.sh; bleibt sie nach einer abgebrochenen Installation
+# liegen, raeumt uninstall sie weg, und das naechste Upgrade legt sie neu an.
+MARKE_FRISCH=0
+if [ -f "$MARKE" ]; then
+    MARKE_FRISCH=1
+fi
 BK="$BASE/config/plugins/$PFOLDER.backup.json"
 CF="$PCONFIG/funkwacht.json"
-if [ -f "$BK" ]; then
+BEST="$BASE/data/plugins/$PFOLDER.bestand"
+
+# ---------- Neuinstallation: Liegengebliebenes beiseitelegen ----------
+# Zweitschrift und Bestand einer frueheren Installation werden nach
+# <name>.alt verschoben - nicht eingespielt, nicht geloescht - und EINMAL
+# gemeldet. Ein aelteres .alt wird dabei ersetzt. uninstall raeumt die .alt
+# ab; die Selbstheilung in fw_lib.php liest nur <ordner>.backup.json, nie
+# die .alt.
+if [ "$MARKE_FRISCH" != "1" ]; then
+    FW_BEISEITE=""
+    FW_NICHT=""
+    for FW_Q in "$BK" "$BEST"; do
+        [ -e "$FW_Q" ] || [ -L "$FW_Q" ] || continue
+        rm -rf "$FW_Q.alt" 2>/dev/null
+        if mv -f "$FW_Q" "$FW_Q.alt" 2>/dev/null && [ ! -e "$FW_Q" ] && [ -e "$FW_Q.alt" ]; then
+            FW_BEISEITE="$FW_BEISEITE $FW_Q.alt"
+        else
+            FW_NICHT="$FW_NICHT $FW_Q"
+        fi
+    done
+    if [ -n "$FW_BEISEITE$FW_NICHT" ]; then
+        echo "<WARNING> Neuinstallation: neben dem Plugin-Ordner lagen Sicherungen einer frueheren"
+        echo "<WARNING> Installation. Sie werden NICHT eingespielt."
+        [ -n "$FW_BEISEITE" ] && echo "<WARNING> Beiseitegelegt:$FW_BEISEITE (die Deinstallation raeumt sie ab)."
+        [ -n "$FW_NICHT" ] && echo "<WARNING> Liess sich nicht beiseitelegen und bleibt liegen:$FW_NICHT"
+    fi
+fi
+
+# Zweitschrift zurueckspielen - nur bei einer Aktualisierung (S1).
+if [ "$MARKE_FRISCH" = "1" ] && [ -f "$BK" ]; then
     INHALT=$(cat "$CF" 2>/dev/null)
     if [ ! -s "$CF" ] || [ "$INHALT" = "{}" ]; then
-        cp -p "$BK" "$CF" && echo "<OK> Konfiguration aus Sicherung wiederhergestellt."
+        if cp -p "$BK" "$CF"; then
+            # I2 (Pruefung 29.09.2026): NACH dem Kopieren - cp -p bringt die
+            # Rechte der Zweitschrift mit, ein chmod davor ist wirkungslos
+            # (Regeln/06). Gemessen: Zweitschrift 644 -> Konfiguration 644.
+            chmod 600 "$CF" "$BK" 2>/dev/null
+            echo "<OK> Konfiguration aus Sicherung wiederhergestellt."
+        fi
     fi
 fi
 
@@ -110,23 +164,48 @@ echo "<INFO> $(python3 --version 2>&1)"
 # Zurueckgeholt wird nur, was fehlt. Eine Neuinstallation ohne vorherige
 # Fassung findet keinen Bestand und faengt sauber bei null an - deshalb ist
 # hier auch keine Meldung noetig, wenn nichts da ist.
-BEST="$BASE/data/plugins/$PFOLDER.bestand"
-if [ -d "$BEST" ]; then
+# I3/S1 (Pruefung 29.09.2026): zurueckgeholt wird nur bei frischer
+# Upgrade-Marke (MARKE_FRISCH, oben berechnet). Bei einer Neuinstallation ist
+# ein liegengebliebener Bestand oben schon nach .bestand.alt verschoben.
+# Der Merker sagt postupgrade.sh, dass das Zurueckholen NACHGESEHEN gelungen
+# ist (I4); er liegt im Datenordner und faellt mit dem naechsten Upgrade.
+MERK="$PDATA/bestand_zurueckgeholt"
+rm -f "$MERK" 2>/dev/null
+if [ -d "$BEST" ] && [ "$MARKE_FRISCH" = "1" ]; then
     ZURUECK=""
-    for F in historie.json faehigkeit.json; do
+    FEHL=""
+    # mqtt_altpraefix.json (S1, offener Punkt 9 aus Stufe 1): die Vormerkung
+    # abzuraeumender MQTT-Praefixe; ohne sie blieben nach einem Upgrade
+    # zwischen Speichern und naechstem Durchgang Altwerte am Broker stehen.
+    for F in historie.json faehigkeit.json mqtt_stand.json mqtt_altpraefix.json; do
         if [ -f "$BEST/$F" ] && [ ! -f "$PDATA/$F" ]; then
-            cp -p "$BEST/$F" "$PDATA/$F" 2>/dev/null && ZURUECK="$ZURUECK $F"
+            if cp -p "$BEST/$F" "$PDATA/$F" 2>/dev/null && cmp -s "$BEST/$F" "$PDATA/$F"; then
+                ZURUECK="$ZURUECK $F"
+            else
+                FEHL="$FEHL $F"
+            fi
         fi
     done
     if [ -d "$BEST/verlauf" ] && [ -z "$(ls -A "$PDATA/verlauf" 2>/dev/null)" ]; then
-        cp -rp "$BEST/verlauf/." "$PDATA/verlauf/" 2>/dev/null \
-            && ZURUECK="$ZURUECK verlauf/"
+        if cp -rp "$BEST/verlauf/." "$PDATA/verlauf/" 2>/dev/null \
+           && diff -rq "$BEST/verlauf" "$PDATA/verlauf" >/dev/null 2>&1; then
+            ZURUECK="$ZURUECK verlauf/"
+        else
+            FEHL="$FEHL verlauf/"
+        fi
     fi
     # stand.json wird NICHT zurueckgeholt - es ist ein Abbild und wird beim
     # naechsten Durchlauf neu geschrieben. Es dient hier nur dem Umstieg
     # einer 0.9.3 (siehe naechster Block) und wird danach geloescht.
     if [ -n "$ZURUECK" ]; then
         echo "<OK> Zaehler und Verlauf aus der Sicherung zurueckgeholt:$ZURUECK"
+    fi
+    # Der Merker nur, wenn etwas zurueckgeholt UND verglichen wurde - ein
+    # leerer Bestand ist nichts, was sich "gerettet" nennen liesse.
+    if [ -n "$FEHL" ]; then
+        echo "<WARNING> Nicht zurueckgeholt:$FEHL - die Sicherung bleibt unter $BEST liegen."
+    elif [ -n "$ZURUECK" ]; then
+        printf '%s\n' "$ZURUECK" > "$MERK" 2>/dev/null
     fi
 fi
 
@@ -139,8 +218,10 @@ fi
 # Gelesen wird die von preupgrade.sh GERETTETE stand.json - die im Datenordner
 # hat der Installer inzwischen geloescht. Ohne diese Zeile waere der ganze
 # Umstieg toter Code gewesen, und das waere niemandem aufgefallen.
+# Eine Sicherung, die nicht aus diesem Vorgang stammt, liefert auch hier
+# nichts (I3).
 ALT_STAND="$BEST/stand.json"
-[ -s "$ALT_STAND" ] || ALT_STAND="$PDATA/stand.json"
+[ "$MARKE_FRISCH" = "1" ] && [ -s "$ALT_STAND" ] || ALT_STAND="$PDATA/stand.json"
 if [ ! -f "$PDATA/historie.json" ] && [ -s "$ALT_STAND" ]; then
     if python3 - "$ALT_STAND" "$PDATA/historie.json" <<'PYEOF'
 import json, sys
@@ -174,7 +255,8 @@ PYEOF
     fi
 fi
 # Der Umstieg laeuft genau einmal; danach ist die alte Datei nur noch Ballast.
-rm -f "$BEST/stand.json" 2>/dev/null
+# Eine fremde Sicherung bleibt unberuehrt liegen (I3).
+[ "$MARKE_FRISCH" = "1" ] && rm -f "$BEST/stand.json" 2>/dev/null
 
 # ---------- Die Rechtedatei ----------
 # BERICHTIGT in 1.0.3. Bis 1.0.2 versuchte dieses Skript, die Rechtedatei
@@ -251,6 +333,15 @@ if [ -x "$PBIN/dienst.sh" ]; then
     fi
 fi
 
+# I5 (Pruefung 29.09.2026): nach einer Aktualisierung mit uebernommenen
+# Sticks raet der Schlusstext nicht zur Erstinstallation (Regeln/06).
+STICKS=$(python3 -c 'import json,sys; d=json.load(open(sys.argv[1],encoding="utf-8")); g=d.get("geraete") if isinstance(d,dict) else None; print(sum(1 for x in (g if isinstance(g,list) else []) if isinstance(x,dict) and str(x.get("name") or "").strip()))' "$CF" 2>/dev/null)
+case "$STICKS" in ''|*[!0-9]*) STICKS=0 ;; esac
+if [ "$MARKE_FRISCH" = "1" ] && [ "$STICKS" -gt 0 ]; then
+    echo "<OK> Aktualisierung abgeschlossen: $STICKS Stick(s) aus der bisherigen Konfiguration"
+    echo "<OK> uebernommen - es ist nichts weiter einzurichten."
+    exit 0
+fi
 echo "<OK> Installation abgeschlossen."
 echo "<INFO> Naechste Schritte in der Plugin-Oberflaeche:"
 echo "<INFO>  1. Reiter Test, Knopf 'Selbstpruefung' - er beantwortet in einer"

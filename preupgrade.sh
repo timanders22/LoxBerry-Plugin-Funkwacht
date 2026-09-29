@@ -85,10 +85,28 @@ else
 fi
 
 CF="$BASE/config/plugins/$PFOLDER/funkwacht.json"
+BK="$BASE/config/plugins/$PFOLDER.backup.json"
+# I1 (Pruefung 29.09.2026): zur Zweitschrift wird nur eine Konfiguration, die
+# sich als NICHT LEERES JSON-Objekt lesen laesst. Bis 1.0.8 kopierte dieser
+# Schritt ungeprueft: eine abgeschnittene oder leere funkwacht.json
+# ueberschrieb die heile Zweitschrift, und nach der Aktualisierung waren
+# Sticks und Aktionstoken weg (Befund Installer 1, Faelle C und D). Gebaut
+# wird unter .neu, verglichen, erst dann umbenannt; die Rechte werden VOR dem
+# Umbenennen gesetzt.
 if [ -f "$CF" ]; then
-    cp -p "$CF" "$BASE/config/plugins/$PFOLDER.backup.json" \
-        && chmod 600 "$BASE/config/plugins/$PFOLDER.backup.json" 2>/dev/null \
-        && echo "<OK> Konfiguration gesichert."
+    if python3 -c 'import json,sys; d=json.load(open(sys.argv[1],encoding="utf-8")); sys.exit(0 if isinstance(d,dict) and d else 1)' "$CF" 2>/dev/null; then
+        rm -f "$BK.neu" 2>/dev/null
+        if cp "$CF" "$BK.neu" 2>/dev/null && chmod 600 "$BK.neu" 2>/dev/null \
+           && cmp -s "$CF" "$BK.neu" && mv -f "$BK.neu" "$BK"; then
+            echo "<OK> Konfiguration gesichert."
+        else
+            rm -f "$BK.neu" 2>/dev/null
+            echo "<WARNING> Die Konfiguration liess sich nicht sichern - die bisherige Zweitschrift bleibt unberuehrt."
+        fi
+    else
+        echo "<WARNING> $CF ist leer oder kein lesbares JSON-Objekt. Sie wird NICHT gesichert;"
+        echo "<WARNING> die bisherige Zweitschrift $BK bleibt unberuehrt."
+    fi
 fi
 
 # ---------- Den Bestand retten ----------
@@ -106,30 +124,63 @@ fi
 # trifft ihn nicht. uninstall raeumt ihn selbst weg.
 BEST="$BASE/data/plugins/$PFOLDER.bestand"
 PDATA="$BASE/data/plugins/$PFOLDER"
-if [ -d "$PDATA" ]; then
-    mkdir -p "$BEST" 2>/dev/null
-    GERETTET=""
+# S1 (Pruefung 29.09.2026, Entscheidung 1 des Hausherrn): ein Bestand aus
+# einem FRUEHEREN Vorgang wird nie eingespielt. Bis Stufe 1 kopierte dieser
+# Schritt ueber einen vorhandenen .bestand hinweg - was dort schon lag und
+# jetzt fehlt (etwa eine alte historie.json), blieb stehen und kam mit der
+# frischen Marke zurueck. Deshalb: den neuen Bestand unter .neu bauen und je
+# Datei vergleichen, dann den alten wegraeumen, erst dann umbenennen
+# (Regeln/06: neben dem Platz bauen, pruefen, dann umbenennen). Der alte
+# faellt auch dann, wenn diesmal nichts zu sichern ist.
+NEU="$BEST.neu"
+rm -rf "$NEU" 2>/dev/null
+GERETTET=""
+NICHT=""
+if [ -d "$PDATA" ] && mkdir -p "$NEU" 2>/dev/null; then
     # stand.json wird mitgenommen, weil postinstall daraus einmalig die
     # Zaehler einer 0.9.3 uebernimmt - ohne Rettung waere die Datei dort
     # laengst geloescht und der Umstieg liefe ins Leere.
-    for F in historie.json stand.json faehigkeit.json; do
-        [ -f "$PDATA/$F" ] && cp -p "$PDATA/$F" "$BEST/$F" 2>/dev/null \
-            && GERETTET="$GERETTET $F"
+    # mqtt_stand.json (M1, Pruefung 29.09.2026): die Zeitstempel des
+    # Mithoerers. Ohne sie galt ein stiller Stick nach jeder Aktualisierung
+    # als "nie gesehen" - und "nie gesehen heilt nicht".
+    # mqtt_altpraefix.json (S1): die Vormerkung abzuraeumender Praefixe.
+    for F in historie.json stand.json faehigkeit.json mqtt_stand.json mqtt_altpraefix.json; do
+        [ -f "$PDATA/$F" ] || continue
+        if cp -p "$PDATA/$F" "$NEU/$F" 2>/dev/null && cmp -s "$PDATA/$F" "$NEU/$F"; then
+            GERETTET="$GERETTET $F"
+        else
+            NICHT="$NICHT $F"
+        fi
     done
     if [ -d "$PDATA/verlauf" ]; then
-        rm -rf "$BEST/verlauf" 2>/dev/null
-        cp -rp "$PDATA/verlauf" "$BEST/verlauf" 2>/dev/null \
-            && GERETTET="$GERETTET verlauf/"
-    fi
-    # Die Wirkung pruefen, nicht den Rueckgabewert: liegt hinterher wirklich
-    # etwas da?
-    if [ -n "$(ls -A "$BEST" 2>/dev/null)" ]; then
-        echo "<OK> Bestand gesichert:$GERETTET"
-    elif [ -f "$PDATA/historie.json" ]; then
-        echo "<INFO> Der Bestand konnte nicht gesichert werden - Zaehler und"
-        echo "<INFO> Verlauf beginnen nach dieser Aktualisierung bei null."
+        if cp -rp "$PDATA/verlauf" "$NEU/verlauf" 2>/dev/null \
+           && diff -rq "$PDATA/verlauf" "$NEU/verlauf" >/dev/null 2>&1; then
+            GERETTET="$GERETTET verlauf/"
+        else
+            NICHT="$NICHT verlauf/"
+        fi
     fi
 fi
+if [ -e "$BEST" ] || [ -L "$BEST" ]; then
+    rm -rf "$BEST" 2>/dev/null
+    if [ -e "$BEST" ] || [ -L "$BEST" ]; then
+        echo "<WARNING> Die Sicherung $BEST aus einem frueheren Vorgang liess sich nicht"
+        echo "<WARNING> wegraeumen; postinstall.sh wuerde sie einspielen. Bitte von Hand loeschen."
+    else
+        echo "<INFO> Eine Sicherung aus einem frueheren Vorgang ($BEST) ist weggeraeumt."
+    fi
+fi
+# Die Wirkung pruefen, nicht den Rueckgabewert: liegt hinterher wirklich
+# etwas da?
+if [ -n "$GERETTET" ] && [ ! -e "$BEST" ] && mv "$NEU" "$BEST" 2>/dev/null \
+   && [ -n "$(ls -A "$BEST" 2>/dev/null)" ]; then
+    echo "<OK> Bestand gesichert:$GERETTET"
+    [ -n "$NICHT" ] && echo "<WARNING> Nicht gesichert:$NICHT - diese Teile beginnen nach der Aktualisierung neu."
+elif [ -f "$PDATA/historie.json" ]; then
+    echo "<INFO> Der Bestand konnte nicht gesichert werden - Zaehler und"
+    echo "<INFO> Verlauf beginnen nach dieser Aktualisierung bei null."
+fi
+rm -rf "$NEU" 2>/dev/null
 
 # Den Dienst anhalten, BEVOR seine Dateien ersetzt werden. Ein laufender
 # Prozess, dessen Quelltext unter ihm ausgetauscht wird, ist eine Wette;

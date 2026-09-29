@@ -222,7 +222,7 @@ function fw_probe_themen()
     foreach ($alle as $k) {
         $a = array_key_exists($k, $py) ? ($py[$k] === null ? '?' : (string) (int) $py[$k]) : '-';
         $b = array_key_exists($k, $php) ? (string) (int) $php[$k] : '-';
-        $c = array_key_exists($k, $tabelle) ? '' : ' (ohne Zeile in der Thementabelle)';
+        $c = array_key_exists($k, $tabelle) ? '' : ' ' . fw_klartext('TEST.P_THEMEN_OHNE_ZEILE');
         if ($a !== $b || $c !== '') {
             $abw[] = $k . ': ' . $a . '/' . $b . $c;
         }
@@ -288,14 +288,31 @@ function fw_probe_mithoerer()
         return array(false, fw_klartext('TEST.P_MITH_STEHT'));
     }
     $stand = fw_json_lesen(fw_paths()['mqttstand']);
-    unset($stand['#letztes']);
+    /* M3 (Pruefung 29.09.2026): der Mithoerer legt seine abonnierte Liste
+     * unter #abonniert ab; hier wird sie gegen die Konfiguration gehalten,
+     * in beide Richtungen. Bis 1.0.8 sah diese Zeile nur, ob schon etwas
+     * ankam - ein geaendertes, nie abonniertes Thema hiess "kein Befund". */
+    $abo = isset($stand['#abonniert']) && is_array($stand['#abonniert'])
+        ? array_map('strval', $stand['#abonniert']) : null;
+    unset($stand['#letztes'], $stand['#abonniert']);
     $still = array();
+    $soll = array();
     foreach (fw_geraete() as $nr => $g) {
         foreach (array('thema', 'thema2') as $feld) {
             $t = trim((string) $g[$feld]);
             $art = $feld === 'thema' ? $g['art'] : $g['art2'];
+            if ($art === 'mqtt' && $t !== '') { $soll[] = $t; }
             if ($art === 'mqtt' && $t !== '' && !isset($stand[$t])) { $still[] = $t; }
         }
+    }
+    if ($abo === null) {
+        return array(null, sprintf(fw_klartext('TEST.P_MITH_ABO_UNBEKANNT'), $pid));
+    }
+    $zuviel = array_values(array_diff($abo, $soll));
+    $fehlt = array_values(array_unique(array_diff($soll, $abo)));
+    if ($zuviel || $fehlt) {
+        return array(false, sprintf(fw_klartext('TEST.P_MITH_ABO_ABW'), $pid,
+            $zuviel ? implode(', ', $zuviel) : '-', $fehlt ? implode(', ', $fehlt) : '-'));
     }
     if ($still) {
         return array(null, sprintf(fw_klartext('TEST.P_MITH_STILL'),
@@ -529,8 +546,9 @@ function fw_test_usb()
     $liste = isset($d['usb']) ? $d['usb'] : array();
     if (!$liste) { return fw_klartext('TEST.S_KEIN_USB'); }
     $o = array(fw_klartext('TEST.S_USB_KOPF'), '');
+    $sp = array_pad(explode(',', fw_klartext('TEST.S_USB_SPALTEN')), 6, '');
     $o[] = sprintf('%-10s %-12s %-9s %-4s %-28s %s',
-                   'Kennung', 'Hersteller', 'Verteiler', 'Port', 'Produkt', 'Geraetedatei');
+                   $sp[0], $sp[1], $sp[2], $sp[3], $sp[4], $sp[5]);
     $o[] = str_repeat('-', 100);
     foreach ($liste as $g) {
         $o[] = sprintf('%-10s %-12s %-9s %-4s %-28s %s',
