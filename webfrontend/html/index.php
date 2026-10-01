@@ -11,7 +11,8 @@
  *   ?token=<TOKEN>&aktion=json            dasselbe als JSON, mit den Texten
  *   ?token=<TOKEN>&aktion=geraet&nr=2     nur ein Stick
  *   ?token=<TOKEN>&aktion=quittieren[&nr=2]   die Bremse zuruecksetzen
- *   ?token=<TOKEN>&aktion=wartung&dauer=60    Wartung fuer 60 Minuten (0 = aus)
+ *   ?token=<TOKEN>&aktion=wartung&dauer=60    Wartung fuer 60 Minuten (0 = aus);
+ *        dieselbe Dauer binnen 60 s: UNVERAENDERT=1, nichts beauftragt (X-7)
  *   ?selftest=1&token=<TOKEN>             antwortet, OHNE etwas auszuloesen
  *
  * ES GIBT KEINEN HEILBEFEHL VON AUSSEN. Ein solcher waere ein Hebel, mit dem
@@ -93,7 +94,16 @@ $fw_stand = fw_stand();
  * wurde und WANN es spaetestens wirkt - nicht ein Erfolg, den hier niemand
  * nachmessen kann. */
 if ($fw_aktion === 'quittieren') {
-    $nr = isset($_GET['nr']) ? max(0, min(99, (int) $_GET['nr'])) : 0;
+    /* Nr. 19 (Welle 4): eine Nummer, die keine ist, wird abgewiesen. Bis
+     * 1.0.9 wurde aus nr=abc still 0 - und quittiert wurden ALLE Sticks. */
+    $fw_nroh = !isset($_GET['nr']) ? '0' : (is_string($_GET['nr']) ? trim($_GET['nr']) : '');
+    if (!preg_match('/^[0-9]{1,2}$/', $fw_nroh)) {
+        http_response_code(400);
+        echo "FEHLER;OK=0;GRUND=NR\n";
+        echo "Erlaubt ist eine Sticknummer von 1 bis 99 oder 0 fuer alle.\n";
+        exit;
+    }
+    $nr = (int) $fw_nroh;
     if ($nr > 0 && !isset($fw_stand['geraete'][(string) $nr])) {
         http_response_code(404);
         echo "FEHLER;OK=0;GRUND=GERAET_UNBEKANNT\n";
@@ -114,8 +124,36 @@ if ($fw_aktion === 'quittieren') {
  * Schalter, den jemand von Hand setzt, wird vergessen; einer mit Ablauf
  * nicht. dauer=0 beendet sie sofort. */
 if ($fw_aktion === 'wartung') {
-    $dauer = isset($_GET['dauer']) ? max(0, min(1440, (int) $_GET['dauer'])) : 60;
+    /* Nr. 19 (Welle 4): bis 1.0.9 wurde die Dauer still geklemmt, und aus
+     * dauer=abc wurde 0 - die Wartung ging aus. Jetzt 400. */
+    $fw_droh = !isset($_GET['dauer']) ? '60' : (is_string($_GET['dauer']) ? trim($_GET['dauer']) : '');
+    if (!preg_match('/^[0-9]{1,4}$/', $fw_droh) || (int) $fw_droh > 1440) {
+        http_response_code(400);
+        echo "FEHLER;OK=0;GRUND=DAUER\n";
+        echo "Erlaubt ist eine ganze Zahl von 0 bis 1440 (Minuten).\n";
+        exit;
+    }
+    $dauer = (int) $fw_droh;
+    /* X-7 (Entscheidung 19, Welle 4): dieselbe Dauer binnen 60 s geht nicht
+     * erneut an den Waechter - ein flatternder Loxone-Ausgang verlaengerte
+     * sonst die Wartung im Sekundentakt und fuellte die Auftragsdatei. Kein
+     * 429: eine andere Dauer gilt sofort. Der Merker faellt geschlossen
+     * aus. */
+    list($fw_gw, $fw_seit) = fw_gleichwert_pruefen('wartung', $dauer);
+    if ($fw_gw === 'UNVERAENDERT') {
+        echo "WARTUNG;OK=1;DAUER=" . $dauer . ";UNVERAENDERT=1;SEIT_S=" . (int) $fw_seit . "\n";
+        exit;
+    }
+    if ($fw_gw === 'MERKER') {
+        fw_log('Der Merker der Gleichwert-Unterdrueckung (' . fw_paths()['gleichwert']
+             . ') laesst sich nicht fuehren - wartung aus Loxone wird mit 503 abgewiesen. '
+             . 'Pruefen: Platz und Eigentuemer (loxberry) von data/plugins.');
+        http_response_code(503);
+        echo "FEHLER;OK=0;GRUND=BREMSE_MERKER\n";
+        exit;
+    }
     if (!fw_auftrag('wartung', 0, $dauer)) {
+        fw_gleichwert_vergessen('wartung');
         http_response_code(500);
         echo "FEHLER;OK=0;GRUND=SCHREIBEN\n";
         exit;

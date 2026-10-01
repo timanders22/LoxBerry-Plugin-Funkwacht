@@ -115,6 +115,10 @@ BEST="$BASE/data/plugins/$PFOLDER.bestand"
 # gemeldet. Ein aelteres .alt wird dabei ersetzt. uninstall raeumt die .alt
 # ab; die Selbstheilung in fw_lib.php liest nur <ordner>.backup.json, nie
 # die .alt.
+# X-1 (Welle 4): dasselbe tut seit dieser Fassung schon preinstall.sh, VOR
+# dem Kopieren der Oberflaeche - sonst konnte ein Seitenaufruf dazwischen
+# die Zweitschrift einspielen. Dieser Block bleibt als Rueckfall und findet
+# danach nichts mehr.
 if [ "$MARKE_FRISCH" != "1" ]; then
     FW_BEISEITE=""
     FW_NICHT=""

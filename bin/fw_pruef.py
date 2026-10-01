@@ -91,7 +91,7 @@ TAUB_AB = 10
 # "systemctl restart *" erlaubt jede Einheit; die Einschraenkung leistet
 # das Plugin, nicht sudo.
 EINHEIT_TABU = ("reboot", "poweroff", "halt", "shutdown", "kexec", "rescue",
-                "emergency", "ssh", "sshd", "apache2", "cron", "systemd-*", "dbus",
+                "emergency", "ssh", "sshd", "apache2", "cron", "systemd", "systemd-*", "dbus",
                 "mosquitto", "lbdefaults", "loxberry*")
 # Endungen, die keinen Dienst bezeichnen.
 EINHEIT_FREMDE_ARTEN = ("target", "socket", "mount", "automount", "swap", "path",
@@ -178,6 +178,10 @@ def einheit_pruefen(name) -> tuple:
         return "", "unerlaubte Zeichen (erlaubt: Buchstaben, Ziffern, @ . _ -)"
     if e.startswith("-"):
         return "", "beginnt mit einem Bindestrich"
+    # a2 (Welle 4, 01.10.2026): ".versteckt", "@x" und "_x" meint niemand als
+    # Einheit - bis 1.0.9 gingen sie durch und scheiterten erst an systemctl.
+    if not re.match(r"^[A-Za-z0-9]", e):
+        return "", "beginnt nicht mit einem Buchstaben oder einer Ziffer"
     if e.endswith(".service"):
         basis = e[:-8]
     else:
@@ -187,6 +191,14 @@ def einheit_pruefen(name) -> tuple:
         basis = e
     if not basis:
         return "", "kein Name"
+    # a2: "x.service.service" - die Endung steht doppelt, so heisst keine Einheit.
+    rest = basis.rsplit(".", 1)[1] if "." in basis else ""
+    if rest == "service" or rest in EINHEIT_FREMDE_ARTEN:
+        return "", "die Endung .%s steht doppelt" % rest
+    # a2: eine Vorlage braucht genau ein @ und eine Instanz dahinter
+    # (getty@tty1); "x@" laesst sich nicht neu starten.
+    if "@" in basis and (basis.count("@") > 1 or basis.endswith("@")):
+        return "", "eine Vorlage mit @ braucht genau einen Namen davor und eine Instanz dahinter"
     vorn = basis.split("@", 1)[0].lower()
     for t in EINHEIT_TABU:
         if (vorn.startswith(t[:-1]) if t.endswith("*") else vorn == t):
@@ -795,6 +807,10 @@ def selbsttest() -> tuple:
     for name in ("reboot.target", "reboot", "apache2", "sshd.service", "systemd-logind",
                  "loxberry-irgendwas", "-help", "ssh.socket", "a b", ""):
         pr("abgewiesen: %r" % name, einheit_pruefen(name)[0], "")
+    # a2 (Welle 4): Anfang, doppelte Endung, Vorlage ohne Instanz, systemd
+    for name in (".versteckt", "@x", "_x", "x@", "x@@y", "x.service.service",
+                 "x.target.service", "systemd"):
+        pr("a2 abgewiesen: %r" % name, einheit_pruefen(name)[0], "")
     vorlage = "getty@tty1"
     pr("eine Vorlage mit @ ist zulaessig", einheit_pruefen(vorlage)[0], vorlage + ".service")
     pr("ein Containername mit Punkt ist zulaessig", container_pruefen("z2m.1"), "")

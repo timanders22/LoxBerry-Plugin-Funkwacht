@@ -82,6 +82,81 @@ $fw_post = (isset($_SERVER['REQUEST_METHOD']) ? $_SERVER['REQUEST_METHOD'] : '')
  * Liste - nicht unter "Nichts wurde gespeichert" (Regeln/04). */
 $fw_misslungen = array();
 
+/* X-2 (Regeln/04, Welle 4, 01.10.2026): die eingetippten Werte EINES
+ * beanstandeten Formulars (settings oder mqtt). Sie reisen mit der
+ * Einmalmeldung und fuellen beim GET das Formular; das beanstandete Feld
+ * traegt sm-beanstandet und aria-invalid. Nie Geheimnisse: das
+ * Broker-Kennwort wird gar nicht gesammelt, sein Feld bleibt leer. */
+$fw_eingaben = null;
+$fw_falsch = array();
+function fw_eingaben_sammeln($form, array $falsch)
+{
+    $str = function ($v) {
+        return is_string($v) ? substr(preg_replace('/[\x00-\x1F\x7F]/', '', $v), 0, 4096) : '';
+    };
+    $e = array('form' => $form, 'falsch' => array_values(array_unique($falsch)),
+               'werte' => array(), 'haken' => array());
+    if ($form === 'settings') {
+        $zeilen = isset($_POST['g_name']) && is_array($_POST['g_name']) ? array_keys($_POST['g_name']) : array();
+        foreach (array('g_name', 'g_art', 'g_pfad', 'g_thema', 'g_kennung', 'g_art2', 'g_pfad2',
+                       'g_thema2', 'g_verkn', 'g_dienst', 'g_container', 'g_usb', 'g_hub', 'g_port',
+                       'g_stufe', 'g_alter', 'g_folge', 'g_ruhe', 'g_abstand', 'g_tag') as $n) {
+            if (!isset($_POST[$n]) || !is_array($_POST[$n])) { continue; }
+            foreach ($_POST[$n] as $i => $v) {
+                if (is_int($i)) { $e['werte'][$n . '[' . $i . ']'] = $str($v); }
+            }
+        }
+        foreach (array('g_aktiv', 'g_heilen', 'g_wachstum', 'g_dienstnach', 'g_lernen') as $n) {
+            foreach ($zeilen as $i) {
+                if (!is_int($i)) { continue; }
+                $e['haken'][$n . '[' . $i . ']'] = isset($_POST[$n]) && is_array($_POST[$n])
+                                                   && !empty($_POST[$n][$i]);
+            }
+        }
+        foreach (array('takt', 'anlauf_s', 'ruhe_von', 'ruhe_bis', 'log_kb', 'verlauf_tage',
+                       'signal_url') as $n) {
+            if (isset($_POST[$n])) { $e['werte'][$n] = $str($_POST[$n]); }
+        }
+        foreach (array('global_aus', 'melden_aktiv', 'signal_ein') as $n) {
+            $e['haken'][$n] = !empty($_POST[$n]);
+        }
+    } elseif ($form === 'mqtt') {
+        foreach (array('mqtt_topic', 'broker_host', 'broker_port', 'broker_user', 'broker_id') as $n) {
+            if (isset($_POST[$n])) { $e['werte'][$n] = $str($_POST[$n]); }
+        }
+        $e['haken']['mqtt_ein'] = !empty($_POST['mqtt_ein']);
+    }
+    return $e;
+}
+/* Beim GET: Wert, Haken und Markierung - nach einer Beanstandung aus den
+ * eingetippten Werten, sonst aus der Konfiguration. */
+function fw_eingabe($form)
+{
+    global $fw_eingaben;
+    return (is_array($fw_eingaben) && isset($fw_eingaben['form']) && $fw_eingaben['form'] === $form)
+         ? $fw_eingaben : null;
+}
+function fw_ew($form, $k, $gespeichert)
+{
+    $e = fw_eingabe($form);
+    if ($e !== null && isset($e['werte'][$k]) && is_string($e['werte'][$k])) { return $e['werte'][$k]; }
+    return (string) $gespeichert;
+}
+function fw_eh($form, $k, $gespeichert)
+{
+    $e = fw_eingabe($form);
+    if ($e !== null && isset($e['haken']) && is_array($e['haken']) && array_key_exists($k, $e['haken'])) {
+        return !empty($e['haken'][$k]);
+    }
+    return (bool) $gespeichert;
+}
+function fw_ek($form, $k)
+{
+    $e = fw_eingabe($form);
+    $ja = ($e !== null && isset($e['falsch']) && is_array($e['falsch']) && in_array($k, $e['falsch'], true));
+    return $ja ? ' class="sm-beanstandet" aria-invalid="true"' : '';
+}
+
 /* U8: das Ergebnis des vorigen POST - NUR beim GET gelesen (Regeln/04). */
 if (!$fw_post) {
     $fw_einmal = fw_einmal_lesen();
@@ -90,6 +165,7 @@ if (!$fw_post) {
         $fw_fehler = $fw_einmal['fehler'];
         $fw_misslungen = $fw_einmal['misslungen'];
         $fw_testausgabe = $fw_einmal['test'];
+        $fw_eingaben = $fw_einmal['eingaben'];      // X-2
     }
 }
 
@@ -138,48 +214,91 @@ if ($fw_post && isset($_POST['sichern'])) {
     }
 }
 
-/* Zwei Helfer, die alle Speicher-Handler brauchen. */
-$fw_sauber = function ($s) {
-    /* Nur Steuerzeichen und Anfuehrungszeichen entfernen - ein hartes
-     * preg_replace auf eine Positivliste zerstoert eingefuegte Werte
-     * (belegt am ACTi-Plugin am 26.07.2026). */
-    return trim(preg_replace('/[\x00-\x1F\x7F"\']/', '', (string) $s));
+/* Die Helfer, die alle Speicher-Handler brauchen. Nr. 16/19 (Welle 4,
+ * 01.10.2026): nichts wird mehr still zurechtgebogen. Bis 1.0.9 entfernte
+ * $fw_sauber Anfuehrungs- und Steuerzeichen und speicherte den Rest, und ein
+ * leeres Zahlfeld behielt still den alten Wert. Jetzt ist beides eine
+ * Beanstandung: nichts gespeichert, das Feld markiert ($fw_falsch), die
+ * Eingabe kommt zurueck (X-2). Still bleibt nur Leerraum am Rand. */
+$fw_text = function ($roh, $bez, $feld) use (&$fw_fehler, &$fw_falsch) {
+    if (!is_string($roh)) {
+        $fw_fehler[] = sprintf(fw_t('FEHLER.KEIN_TEXT'), $bez);
+        $fw_falsch[] = $feld;
+        return null;
+    }
+    $roh = trim($roh);
+    if (preg_match('/[\x00-\x1F\x7F"\']/', $roh)) {
+        $fw_fehler[] = sprintf(fw_t('FEHLER.ZEICHEN'), $bez, preg_replace('/[\x00-\x1F\x7F]/', '?', $roh));
+        $fw_falsch[] = $feld;
+        return null;
+    }
+    return $roh;
 };
-$fw_zahl = function ($roh, $von, $bis, $bez) use (&$fw_fehler) {
+$fw_zahl = function ($roh, $von, $bis, $bez, $feld) use (&$fw_fehler, &$fw_falsch) {
     /* Eine Zahl pruefen statt sie stillschweigend zurechtzubiegen - mit
      * derselben Pruefstelle wie das Zurueckspielen. Bis 1.0.8 wurde hier
      * gerundet: 60.4 wurde still 60 (U6, Pruefung 29.09.2026). */
-    $roh = trim((string) $roh);
-    if ($roh === '') { return null; }
-    list($w, $grund) = fw_ganzzahl_pruefen($roh, $von, $bis);
+    $roh = is_string($roh) ? trim($roh) : null;
+    if ($roh === '') {
+        $fw_fehler[] = sprintf(fw_t('FEHLER.FELD_LEER'), $bez);
+        $fw_falsch[] = $feld;
+        return null;
+    }
+    list($w, $grund) = $roh === null ? array(null, 'keine_zahl')
+                                     : fw_ganzzahl_pruefen($roh, $von, $bis);
     if ($grund === 'keine_zahl') {
-        $fw_fehler[] = sprintf(fw_t('FEHLER.KEINE_ZAHL'), $bez, $roh);
+        $fw_fehler[] = sprintf(fw_t('FEHLER.KEINE_ZAHL'), $bez, (string) $roh);
     } elseif ($grund === 'keine_ganzzahl') {
         $fw_fehler[] = sprintf(fw_t('FEHLER.KEINE_GANZZAHL'), $bez, $roh);
     } elseif ($grund === 'ausserhalb') {
         $fw_fehler[] = sprintf(fw_t('FEHLER.AUSSERHALB'), $bez, $roh, $von, $bis);
     }
+    if ($grund !== '') { $fw_falsch[] = $feld; }
     return $w;
 };
-$fw_zeit = function ($roh, $bez) use (&$fw_fehler) {
-    $roh = trim((string) $roh);
+$fw_zeit = function ($roh, $bez, $feld) use (&$fw_fehler, &$fw_falsch) {
+    $roh = is_string($roh) ? trim($roh) : null;
     if ($roh === '') { return ''; }
-    if (!preg_match('/^([01][0-9]|2[0-3]):[0-5][0-9]$/', $roh)) {
-        $fw_fehler[] = sprintf(fw_t('FEHLER.KEINE_UHRZEIT'), $bez, $roh);
+    if ($roh === null || !preg_match('/^([01][0-9]|2[0-3]):[0-5][0-9]$/', $roh)) {
+        $fw_fehler[] = sprintf(fw_t('FEHLER.KEINE_UHRZEIT'), $bez, (string) $roh);
+        $fw_falsch[] = $feld;
         return null;
     }
     return $roh;
 };
+/* Welches Formularfeld gehoert zu welchem Schluessel einer Stick-Zeile?
+ * Fuer die Markierung (X-2) der Beanstandungen aus fw_geraet_pruefen(). */
+$fw_formnamen = array('name' => 'g_name', 'art' => 'g_art', 'pfad' => 'g_pfad',
+    'thema' => 'g_thema', 'kennung' => 'g_kennung', 'art2' => 'g_art2', 'pfad2' => 'g_pfad2',
+    'thema2' => 'g_thema2', 'verkn' => 'g_verkn', 'dienst' => 'g_dienst',
+    'container' => 'g_container', 'usb_pfad' => 'g_usb', 'hub' => 'g_hub', 'port' => 'g_port',
+    'hoechststufe' => 'g_stufe', 'hoechstalter' => 'g_alter', 'reihenfolge' => 'g_folge',
+    'ruhe_s' => 'g_ruhe', 'abstand_s' => 'g_abstand', 'je_tag' => 'g_tag', 'heilen' => 'g_heilen');
 
 /* ---------------- Speichern: Sticks und Betrieb ---------------- */
 if ($fw_post && isset($_POST['speichern_geraete'])) {
     $fw_cfg = fw_config();
     $fw_anzahl = count($fw_cfg['geraete']);
-    $fw_feld = function ($name, $i) use ($fw_sauber) {
-        $a = isset($_POST[$name]) ? (array) $_POST[$name] : array();
-        return isset($a[$i]) ? $fw_sauber($a[$i]) : '';
+    $fw_feld = function ($name, $i, $label) use ($fw_text) {
+        $a = isset($_POST[$name]) && is_array($_POST[$name]) ? $_POST[$name] : array();
+        if (!array_key_exists($i, $a)) { return ''; }
+        $w = $fw_text($a[$i], fw_t('EINST.GERAET') . ' ' . ($i + 1) . ' / ' . fw_t('EINST.' . $label),
+                      $name . '[' . $i . ']');
+        /* Beanstandet: gespeichert wird ohnehin nichts. Die Zeile wird mit
+         * dem getippten Wert weitergeprueft, damit kein Folgesatz ("kein
+         * Name") entsteht, der nicht stimmt. */
+        if ($w === null) { return is_string($a[$i]) ? trim($a[$i]) : ''; }
+        return $w;
+    };
+    $fw_roh_i = function ($name, $i) {
+        return isset($_POST[$name]) && is_array($_POST[$name]) && array_key_exists($i, $_POST[$name])
+             ? $_POST[$name][$i] : '';
     };
     $fw_arten_w = fw_arten();
+    /* a1 (Welle 4): die Systemgeraete, die der Waechter zuletzt gemessen hat. */
+    $fw_st = fw_stand();
+    $fw_tabu = isset($fw_st['tabu']) && is_array($fw_st['tabu']) ? $fw_st['tabu'] : array();
+    $fw_vhinweise = array();
     $fw_neu = array();
     for ($fw_i = 0; $fw_i < $fw_anzahl; $fw_i++) {
         /* Was das Formular gar nicht mitgeschickt hat, wird NICHT angefasst.
@@ -192,20 +311,22 @@ if ($fw_post && isset($_POST['speichern_geraete'])) {
             continue;
         }
         $g = fw_geraet_vorgabe();
-        $g['name']      = $fw_feld('g_name', $fw_i);
-        $g['art']       = $fw_feld('g_art', $fw_i);
-        $g['pfad']      = $fw_feld('g_pfad', $fw_i);
-        $g['thema']     = $fw_feld('g_thema', $fw_i);
-        $g['kennung']   = strtolower($fw_feld('g_kennung', $fw_i));
-        $g['art2']      = $fw_feld('g_art2', $fw_i);
-        $g['pfad2']     = $fw_feld('g_pfad2', $fw_i);
-        $g['thema2']    = $fw_feld('g_thema2', $fw_i);
-        $g['verkn']     = $fw_feld('g_verkn', $fw_i);
-        $g['dienst']    = $fw_feld('g_dienst', $fw_i);
-        $g['container'] = $fw_feld('g_container', $fw_i);
-        $g['usb_pfad']  = $fw_feld('g_usb', $fw_i);
-        $g['hub']       = $fw_feld('g_hub', $fw_i);
-        $g['reihenfolge'] = $fw_feld('g_folge', $fw_i);
+        $g['name']      = $fw_feld('g_name', $fw_i, 'L_NAME');
+        $g['art']       = $fw_feld('g_art', $fw_i, 'L_ART');
+        $g['pfad']      = $fw_feld('g_pfad', $fw_i, 'L_PFAD');
+        $g['thema']     = $fw_feld('g_thema', $fw_i, 'L_THEMA');
+        /* Nr. 19: nicht mehr still kleingeschrieben - der Waechter vergleicht
+         * ohne Ruecksicht auf Gross/Klein. */
+        $g['kennung']   = $fw_feld('g_kennung', $fw_i, 'L_KENNUNG');
+        $g['art2']      = $fw_feld('g_art2', $fw_i, 'L_ART2');
+        $g['pfad2']     = $fw_feld('g_pfad2', $fw_i, 'L_PFAD2');
+        $g['thema2']    = $fw_feld('g_thema2', $fw_i, 'L_THEMA2');
+        $g['verkn']     = $fw_feld('g_verkn', $fw_i, 'L_VERKN');
+        $g['dienst']    = $fw_feld('g_dienst', $fw_i, 'L_DIENST');
+        $g['container'] = $fw_feld('g_container', $fw_i, 'L_CONTAINER');
+        $g['usb_pfad']  = $fw_feld('g_usb', $fw_i, 'L_USB_PFAD');
+        $g['hub']       = $fw_feld('g_hub', $fw_i, 'L_HUB');
+        $g['reihenfolge'] = $fw_feld('g_folge', $fw_i, 'L_FOLGE');
         $g['aktiv']       = !empty($_POST['g_aktiv'][$fw_i]) ? 1 : 0;
         $g['heilen']      = !empty($_POST['g_heilen'][$fw_i]) ? 1 : 0;
         $g['wachstum']    = !empty($_POST['g_wachstum'][$fw_i]) ? 1 : 0;
@@ -213,16 +334,46 @@ if ($fw_post && isset($_POST['speichern_geraete'])) {
         $g['lernen']      = !empty($_POST['g_lernen'][$fw_i]) ? 1 : 0;
 
         $bez = fw_t('EINST.GERAET') . ' ' . ($fw_i + 1);
+        /* Nr. 19 (Welle 4): ein Wert ausserhalb der Auswahl wird beanstandet.
+         * Bis 1.0.9 setzte fw_geraet_geradebiegen() ihn still auf die
+         * Vorgabe (Art -> datei, Verknuepfung -> oder). */
+        foreach (array('art' => array('g_art', array_keys($fw_arten_w), 'L_ART'),
+                       'art2' => array('g_art2', array_keys(fw_arten2()), 'L_ART2'),
+                       'verkn' => array('g_verkn', array('und', 'oder'), 'L_VERKN'),
+                       'reihenfolge' => array('g_folge', array('normal', 'usb_zuerst'), 'L_FOLGE'))
+                 as $fw_k => $fw_a) {
+            if (!in_array($g[$fw_k], $fw_a[1], true)) {
+                $fw_fehler[] = sprintf(fw_t('FEHLER.AUSWAHL'), $bez . ' / ' . fw_t('EINST.' . $fw_a[2]),
+                                       $g[$fw_k]);
+                $fw_falsch[] = $fw_a[0] . '[' . $fw_i . ']';
+            }
+        }
         foreach (fw_geraet_zahlen() as $fw_f => $fw_d) {
-            $w = $fw_zahl($fw_feld($fw_d[0], $fw_i), $fw_d[1], $fw_d[2],
-                          $bez . ' / ' . fw_t('EINST.L_' . strtoupper($fw_f)));
+            $w = $fw_zahl($fw_roh_i($fw_d[0], $fw_i), $fw_d[1], $fw_d[2],
+                          $bez . ' / ' . fw_t('EINST.L_' . strtoupper($fw_f)),
+                          $fw_d[0] . '[' . $fw_i . ']');
             if ($w !== null) { $g[$fw_f] = $w; }
         }
 
         /* Die Zusammenhaenge der Zeile - dieselbe Pruefstelle wie beim
          * Zurueckspielen (fw_geraet_pruefen in fw_lib.php, U3), dazu der
-         * Dienst- und Containername (D5). */
-        $fw_fehler = array_merge($fw_fehler, fw_geraet_pruefen($g, $fw_i + 1));
+         * Dienst- und Containername (D5), die Kennung (a3) und die Felder
+         * zum Markieren (X-2). */
+        $fw_ff = array();
+        $fw_fehler = array_merge($fw_fehler, fw_geraet_pruefen($g, $fw_i + 1, $fw_ff));
+        foreach ($fw_ff as $fw_k) {
+            if (isset($fw_formnamen[$fw_k])) { $fw_falsch[] = $fw_formnamen[$fw_k] . '[' . $fw_i . ']'; }
+        }
+        /* a1 (Welle 4): wuerde der Waechter Stufe 3 an diesem Verteiler
+         * ablehnen? Ein Hinweis, keine Beanstandung - Stufe 1 und 2 bleiben
+         * moeglich, gespeichert wird trotzdem. */
+        if ($g['name'] !== '' && $g['heilen'] && $g['hoechststufe'] >= 3
+            && $g['hub'] !== '' && $g['port'] > 0) {
+            $fw_vs = fw_verteiler_sperre($g['hub'], $g['port'], $fw_tabu);
+            if ($fw_vs !== '') {
+                $fw_vhinweise[] = sprintf(fw_t('EINST.VERTEILER_HINWEIS'), $fw_i + 1, $g['hub'], $fw_vs);
+            }
+        }
         /* Durch dieselbe Normalisierung wie beim Lesen - und damit durch
          * genau EINE Stelle. Ohne sie stand in der Datei ein leerer Wert,
          * wo ein Auswahlfeld nicht mitgekommen war: gelesen wurde er zwar
@@ -235,27 +386,34 @@ if ($fw_post && isset($_POST['speichern_geraete'])) {
 
     foreach (fw_betrieb_zahlen() as $fw_k => $fw_d) {
         $w = $fw_zahl(isset($_POST[$fw_d[0]]) ? $_POST[$fw_d[0]] : '',
-                      $fw_d[1], $fw_d[2], fw_t('EINST.L_' . strtoupper($fw_k)));
+                      $fw_d[1], $fw_d[2], fw_t('EINST.L_' . strtoupper($fw_k)), $fw_d[0]);
         if ($w !== null) { $fw_cfg[$fw_k] = $w; }
     }
+    /* Bezeichnung: bis 1.0.9 stand hier EINST.L_RUHE_VON bzw. _BIS - die
+     * gibt es nicht, und die Beanstandung zeigte den Schluesselnamen. */
     foreach (array('ruhe_von', 'ruhe_bis') as $fw_k) {
         $w = $fw_zeit(isset($_POST[$fw_k]) ? $_POST[$fw_k] : '',
-                      fw_t('EINST.L_' . strtoupper($fw_k)));
+                      fw_t('EINST.L_RUHEFENSTER'), $fw_k);
         if ($w !== null) { $fw_cfg[$fw_k] = $w; }
     }
     $fw_cfg['global_aus']   = !empty($_POST['global_aus']) ? 1 : 0;
     $fw_cfg['melden_aktiv'] = !empty($_POST['melden_aktiv']) ? 1 : 0;
     $fw_cfg['signal_ein']   = !empty($_POST['signal_ein']) ? 1 : 0;
-    $fw_sig = trim((string) (isset($_POST['signal_url']) ? $_POST['signal_url'] : ''));
+    $fw_sig = isset($_POST['signal_url']) && is_string($_POST['signal_url']) ? trim($_POST['signal_url']) : '';
     if ($fw_sig !== '' && !preg_match('#^https?://[^\s"\']+$#', $fw_sig)) {
         $fw_fehler[] = sprintf(fw_t('FEHLER.SIGNAL_URL'), $fw_sig);
+        $fw_falsch[] = 'signal_url';
     } else {
         $fw_cfg['signal_url'] = $fw_sig;
     }
     if ($fw_cfg['signal_ein'] && $fw_cfg['signal_url'] === '') {
         $fw_fehler[] = fw_t('FEHLER.SIGNAL_LEER');
+        $fw_falsch[] = 'signal_url';
     }
 
+    /* a1: der Hinweis kommt in jedem Fall - auch wenn eine Beanstandung
+     * das Speichern verhindert, gehoert er zu derselben Eingabe. */
+    $fw_meldungen = array_merge($fw_meldungen, $fw_vhinweise);
     if (!$fw_fehler) {
         if (fw_config_speichern($fw_cfg)) {
             $fw_meldungen[] = fw_t('ALLG.GESPEICHERT');
@@ -263,6 +421,8 @@ if ($fw_post && isset($_POST['speichern_geraete'])) {
         } else {
             $fw_fehler[] = fw_t('FEHLER.SPEICHERN');
         }
+    } else {
+        $fw_eingaben = fw_eingaben_sammeln('settings', $fw_falsch);     // X-2
     }
     $fw_tab = 'tab-settings';
 }
@@ -352,29 +512,44 @@ if ($fw_post && isset($_POST['speichern_mqtt'])) {
     $fw_alt_praefix = (string) $fw_cfg['mqtt_topic'];
     $fw_alt_ein = (int) $fw_cfg['mqtt_ein'];
     $fw_cfg['mqtt_ein'] = !empty($_POST['mqtt_ein']) ? 1 : 0;
-    $fw_thema = strtolower($fw_sauber(isset($_POST['mqtt_topic']) ? $_POST['mqtt_topic'] : ''));
-    $fw_thema = trim($fw_thema, '/');
-    if ($fw_thema === '') {
-        $fw_cfg['mqtt_topic'] = 'funkwacht';
+    /* Nr. 19 (Welle 4): still bleibt nur das Kleinschreiben und der
+     * Leerraum am Rand. Bis 1.0.9 wurde ein leeres Thema still
+     * "funkwacht", ein Schraegstrich am Rand still entfernt und ein
+     * Anfuehrungszeichen still geloescht. */
+    $fw_thema = isset($_POST['mqtt_topic']) && is_string($_POST['mqtt_topic'])
+              ? strtolower(trim($_POST['mqtt_topic'])) : null;
+    if ($fw_thema === null) {
+        $fw_fehler[] = sprintf(fw_t('FEHLER.KEIN_TEXT'), fw_t('MQTT.THEMA'));
+        $fw_falsch[] = 'mqtt_topic';
+    } elseif ($fw_thema === '') {
+        $fw_fehler[] = fw_t('FEHLER.THEMA_LEER');
+        $fw_falsch[] = 'mqtt_topic';
     } elseif (!preg_match('#^[a-z0-9_\-/]+$#', $fw_thema)) {
         // Ein Thema mit + oder # ist ein Filtermuster und als Ziel unbrauchbar.
         $fw_fehler[] = sprintf(fw_t('FEHLER.THEMA'), $fw_thema);
+        $fw_falsch[] = 'mqtt_topic';
+    } elseif (trim($fw_thema, '/') !== $fw_thema) {
+        $fw_fehler[] = sprintf(fw_t('FEHLER.THEMA_RAND'), $fw_thema);
+        $fw_falsch[] = 'mqtt_topic';
     } else {
         $fw_cfg['mqtt_topic'] = $fw_thema;
     }
-    foreach (array('broker_host', 'broker_user', 'broker_id') as $fw_k) {
-        $fw_cfg[$fw_k] = $fw_sauber(isset($_POST[$fw_k]) ? $_POST[$fw_k] : '');
+    foreach (array('broker_host' => 'L_HOST', 'broker_user' => 'L_USER', 'broker_id' => 'L_ID')
+             as $fw_k => $fw_l) {
+        $w = $fw_text(isset($_POST[$fw_k]) ? $_POST[$fw_k] : '', fw_t('MQTT.' . $fw_l), $fw_k);
+        if ($w !== null) { $fw_cfg[$fw_k] = $w; }
     }
-    $fw_bp = trim((string) (isset($_POST['broker_port']) ? $_POST['broker_port'] : ''));
+    $fw_bp = isset($_POST['broker_port']) && is_string($_POST['broker_port']) ? trim($_POST['broker_port']) : '';
     if ($fw_bp !== '' && (!ctype_digit($fw_bp) || (int) $fw_bp < 1 || (int) $fw_bp > 65535)) {
         $fw_fehler[] = sprintf(fw_t('FEHLER.BROKER_PORT'), $fw_bp);
+        $fw_falsch[] = 'broker_port';
     } else {
         $fw_cfg['broker_port'] = $fw_bp;
     }
     /* Ein leeres Kennwortfeld LOESCHT NICHTS - sonst verliert jedes Speichern
      * das Kennwort, weil der Browser es nicht zurueckschickt. Geloescht wird
      * nur ueber den ausdruecklichen Haken. */
-    $fw_bpw = (string) (isset($_POST['broker_pass']) ? $_POST['broker_pass'] : '');
+    $fw_bpw = isset($_POST['broker_pass']) && is_string($_POST['broker_pass']) ? $_POST['broker_pass'] : '';
     if (!empty($_POST['broker_pass_weg'])) {
         $fw_cfg['broker_pass'] = '';
     } elseif (trim($fw_bpw) !== '') {
@@ -406,6 +581,8 @@ if ($fw_post && isset($_POST['speichern_mqtt'])) {
         } else {
             $fw_fehler[] = fw_t('FEHLER.SPEICHERN');
         }
+    } else {
+        $fw_eingaben = fw_eingaben_sammeln('mqtt', $fw_falsch);     // X-2
     }
     $fw_tab = 'tab-mqtt';
 }
@@ -493,8 +670,17 @@ if ($fw_post && isset($_POST['quittieren'])) {
     $fw_tab = 'tab-test';
 }
 if ($fw_post && isset($_POST['wartung'])) {
-    $fw_dauer = max(0, min(1440, (int) $_POST['wartung']));
-    if (fw_auftrag('wartung', 0, $fw_dauer)) {
+    /* Nr. 19 (Welle 4): eine Dauer ausserhalb 0..1440 wird nicht mehr still
+     * geklemmt, sondern abgewiesen. */
+    $fw_wroh = is_string($_POST['wartung']) ? trim($_POST['wartung']) : '';
+    if (!preg_match('/^[0-9]{1,4}$/', $fw_wroh) || (int) $fw_wroh > 1440) {
+        $fw_misslungen[] = sprintf(fw_t('AUFTR.DAUER_FALSCH'), $fw_wroh);
+    } elseif (fw_auftrag('wartung', 0, (int) $fw_wroh)) {
+        $fw_dauer = (int) $fw_wroh;
+        /* X-7: von Hand geschaltet - der Gleichwert-Merker des Endpunkts
+         * gilt nicht mehr, sonst unterdrueckte er den naechsten echten
+         * Wechsel aus Loxone. */
+        fw_gleichwert_vergessen('wartung');
         $fw_meldungen[] = $fw_dauer
             ? sprintf(fw_t('AUFTR.WARTUNG_EIN'), $fw_dauer, fw_auftrag_wartezeit())
             : sprintf(fw_t('AUFTR.WARTUNG_AUS'), fw_auftrag_wartezeit());
@@ -515,7 +701,12 @@ if ($fw_post && isset($_POST['statistik_weg'])) {
 }
 
 /* ---------------- Protokoll leeren ---------------- */
-if ($fw_post && isset($_POST['log_leeren'])) {
+if ($fw_post && isset($_POST['log_leeren']) && empty($_POST['sicher_log'])) {
+    /* b1 (Welle 4, Regeln/04 "Formregeln fuer einen loeschenden Knopf"):
+     * ohne Haekchen geschieht nichts. */
+    $fw_fehler[] = fw_t('ALLG.OHNE_HAKEN');
+    $fw_tab = 'tab-log';
+} elseif ($fw_post && isset($_POST['log_leeren'])) {
     /* U11: die Wirkung pruefen - bis 1.0.8 hiess es "geleert", auch wenn
      * das Schreiben scheiterte. */
     $fw_leer_ok = $fw_p['log'] !== '' && @file_put_contents($fw_p['log'], '') !== false;
@@ -554,7 +745,7 @@ if ($fw_post && isset($_POST['test'])) {
  * ohne Umleitung gerendert und das gesagt. Ein vom Wachposten
  * abgewiesenes Formular hat nichts ausgeloest und rendert direkt. */
 if ($fw_post) {
-    if (fw_einmal_schreiben($fw_meldungen, $fw_fehler, $fw_misslungen, $fw_testausgabe)) {
+    if (fw_einmal_schreiben($fw_meldungen, $fw_fehler, $fw_misslungen, $fw_testausgabe, $fw_eingaben)) {
         header('Location: index.php?form=' . rawurlencode(substr($fw_tab, 4)), true, 303);
         exit;
     }
@@ -696,6 +887,11 @@ if ($fw_rahmen) {
     background-repeat: no-repeat; background-position: right 10px center;
     padding-right: 32px; cursor: pointer; }
 .sm-tbl select { padding-right: 28px; background-position: right 7px center; }
+/* Ergaenzung (Welle 4, 01.10.2026, nicht aus der Vorlage): X-2 markiert das
+   beanstandete Feld. background-color statt der Kurzform - die Kurzform
+   loeschte den Pfeil des Auswahlfelds (siehe oben). */
+.sm-wrap input.sm-beanstandet, .sm-wrap select.sm-beanstandet {
+    border: 2px solid #b00000 !important; background-color: #fff5f4 !important; }
 
 </style>
 
@@ -818,6 +1014,24 @@ if ($fw_rahmen) {
 </div>
 <?php } ?>
 
+<?php
+/* Docker-2 (Welle 4): Zeilen der Art "Docker" brauchen Docker und den
+ * Zugriff darauf (docker inspect ohne sudo). Fehlt eines, sagt es die Seite
+ * hier - getrennt nach "fehlt" und "kein Zugriff" - und verweist auf
+ * Docker NG. Die Funkwacht legt selbst keine Container an. */
+$fw_dzeilen = array();
+foreach ($fw_geraete as $fw_nr => $fw_g) {
+    if ($fw_g['art'] === 'docker' || $fw_g['art2'] === 'docker') { $fw_dzeilen[] = (int) $fw_nr; }
+}
+if ($fw_dzeilen) {
+    list($fw_dlage, $fw_dgrund) = fw_docker_lage(5);
+    if ($fw_dlage === 'fehlt') { ?>
+<div class="sm-warnung" id="fw_docker"><?= sprintf(fw_t('EINST.DOCKER_FEHLT'), fw_e(implode(', ', $fw_dzeilen))) ?></div>
+<?php } elseif ($fw_dlage === 'kein_zugriff') { ?>
+<div class="sm-warnung" id="fw_docker"><?= sprintf(fw_t('EINST.DOCKER_KEIN_ZUGRIFF'), fw_e(implode(', ', $fw_dzeilen)), fw_e($fw_dgrund)) ?></div>
+<?php }
+} ?>
+
 <h3><?= fw_e(fw_t('DIENST.H')) ?></h3>
 <p class="sm-hilfe"><?= fw_t('DIENST.ERKLAERUNG') ?>
 <?php if ($fw_braucht_mithoerer) { ?>
@@ -895,72 +1109,72 @@ if ($fw_rahmen) {
 <table class="sm-tbl">
 <tr>
   <td><label><?= fw_e(fw_t('EINST.L_NAME')) ?><br>
-    <input data-role="none" type="text" size="16" name="g_name[<?= $fw_i ?>]" value="<?= fw_e($g['name']) ?>"></label></td>
+    <input data-role="none" type="text" size="16" name="g_name[<?= $fw_i ?>]" value="<?= fw_e(fw_ew('settings', "g_name[$fw_i]", $g['name'])) ?>"<?= fw_ek('settings', "g_name[$fw_i]") ?>></label></td>
   <td><label><?= fw_e(fw_t('EINST.L_ART')) ?><br>
-    <select data-role="none" name="g_art[<?= $fw_i ?>]">
+    <select data-role="none" name="g_art[<?= $fw_i ?>]"<?= fw_ek('settings', "g_art[$fw_i]") ?>>
 <?php foreach ($fw_arten_wahl as $fw_a => $fw_as) { ?>
-      <option value="<?= fw_e($fw_a) ?>"<?= $g['art'] === $fw_a ? ' selected' : '' ?>><?= fw_e(fw_t($fw_as)) ?></option>
+      <option value="<?= fw_e($fw_a) ?>"<?= fw_ew('settings', "g_art[$fw_i]", $g['art']) === (string) $fw_a ? ' selected' : '' ?>><?= fw_e(fw_t($fw_as)) ?></option>
 <?php } ?>
     </select></label></td>
   <td><label><?= fw_e(fw_t('EINST.L_PFAD')) ?><br>
-    <input data-role="none" type="text" size="26" name="g_pfad[<?= $fw_i ?>]" value="<?= fw_e($g['pfad']) ?>"></label></td>
+    <input data-role="none" type="text" size="26" name="g_pfad[<?= $fw_i ?>]" value="<?= fw_e(fw_ew('settings', "g_pfad[$fw_i]", $g['pfad'])) ?>"<?= fw_ek('settings', "g_pfad[$fw_i]") ?>></label></td>
   <td><label><?= fw_e(fw_t('EINST.L_THEMA')) ?><br>
-    <input data-role="none" type="text" size="22" name="g_thema[<?= $fw_i ?>]" value="<?= fw_e($g['thema']) ?>"></label></td>
+    <input data-role="none" type="text" size="22" name="g_thema[<?= $fw_i ?>]" value="<?= fw_e(fw_ew('settings', "g_thema[$fw_i]", $g['thema'])) ?>"<?= fw_ek('settings', "g_thema[$fw_i]") ?>></label></td>
   <td><label><?= fw_e(fw_t('EINST.L_HOECHSTALTER')) ?><br>
-    <input data-role="none" type="text" size="5" name="g_alter[<?= $fw_i ?>]" value="<?= (int) $g['hoechstalter'] ?>"></label></td>
+    <input data-role="none" type="text" size="5" name="g_alter[<?= $fw_i ?>]" value="<?= fw_e(fw_ew('settings', "g_alter[$fw_i]", (int) $g['hoechstalter'])) ?>"<?= fw_ek('settings', "g_alter[$fw_i]") ?>></label></td>
 </tr>
 <tr>
   <td><label><?= fw_e(fw_t('EINST.L_ART2')) ?><br>
-    <select data-role="none" name="g_art2[<?= $fw_i ?>]">
+    <select data-role="none" name="g_art2[<?= $fw_i ?>]"<?= fw_ek('settings', "g_art2[$fw_i]") ?>>
 <?php foreach ($fw_arten_zwei as $fw_a => $fw_as) { ?>
-      <option value="<?= fw_e($fw_a) ?>"<?= $g['art2'] === $fw_a ? ' selected' : '' ?>><?= fw_e(fw_t($fw_as)) ?></option>
+      <option value="<?= fw_e($fw_a) ?>"<?= fw_ew('settings', "g_art2[$fw_i]", $g['art2']) === (string) $fw_a ? ' selected' : '' ?>><?= fw_e(fw_t($fw_as)) ?></option>
 <?php } ?>
     </select></label></td>
   <td><label><?= fw_e(fw_t('EINST.L_VERKN')) ?><br>
-    <select data-role="none" name="g_verkn[<?= $fw_i ?>]">
-      <option value="oder"<?= $g['verkn'] === 'oder' ? ' selected' : '' ?>><?= fw_e(fw_t('EINST.V_ODER')) ?></option>
-      <option value="und"<?= $g['verkn'] === 'und' ? ' selected' : '' ?>><?= fw_e(fw_t('EINST.V_UND')) ?></option>
+    <select data-role="none" name="g_verkn[<?= $fw_i ?>]"<?= fw_ek('settings', "g_verkn[$fw_i]") ?>>
+      <option value="oder"<?= fw_ew('settings', "g_verkn[$fw_i]", $g['verkn']) === 'oder' ? ' selected' : '' ?>><?= fw_e(fw_t('EINST.V_ODER')) ?></option>
+      <option value="und"<?= fw_ew('settings', "g_verkn[$fw_i]", $g['verkn']) === 'und' ? ' selected' : '' ?>><?= fw_e(fw_t('EINST.V_UND')) ?></option>
     </select></label></td>
   <td><label><?= fw_e(fw_t('EINST.L_PFAD2')) ?><br>
-    <input data-role="none" type="text" size="26" name="g_pfad2[<?= $fw_i ?>]" value="<?= fw_e($g['pfad2']) ?>"></label></td>
+    <input data-role="none" type="text" size="26" name="g_pfad2[<?= $fw_i ?>]" value="<?= fw_e(fw_ew('settings', "g_pfad2[$fw_i]", $g['pfad2'])) ?>"<?= fw_ek('settings', "g_pfad2[$fw_i]") ?>></label></td>
   <td><label><?= fw_e(fw_t('EINST.L_THEMA2')) ?><br>
-    <input data-role="none" type="text" size="22" name="g_thema2[<?= $fw_i ?>]" value="<?= fw_e($g['thema2']) ?>"></label></td>
+    <input data-role="none" type="text" size="22" name="g_thema2[<?= $fw_i ?>]" value="<?= fw_e(fw_ew('settings', "g_thema2[$fw_i]", $g['thema2'])) ?>"<?= fw_ek('settings', "g_thema2[$fw_i]") ?>></label></td>
   <td><label><?= fw_e(fw_t('EINST.L_KENNUNG')) ?><br>
-    <input data-role="none" type="text" size="11" name="g_kennung[<?= $fw_i ?>]" value="<?= fw_e($g['kennung']) ?>"></label></td>
+    <input data-role="none" type="text" size="11" name="g_kennung[<?= $fw_i ?>]" value="<?= fw_e(fw_ew('settings', "g_kennung[$fw_i]", $g['kennung'])) ?>"<?= fw_ek('settings', "g_kennung[$fw_i]") ?>></label></td>
 </tr>
 <tr>
   <td><label><?= fw_e(fw_t('EINST.L_DIENST')) ?><br>
-    <input data-role="none" type="text" size="16" name="g_dienst[<?= $fw_i ?>]" value="<?= fw_e($g['dienst']) ?>"></label></td>
+    <input data-role="none" type="text" size="16" name="g_dienst[<?= $fw_i ?>]" value="<?= fw_e(fw_ew('settings', "g_dienst[$fw_i]", $g['dienst'])) ?>"<?= fw_ek('settings', "g_dienst[$fw_i]") ?>></label></td>
   <td><label><?= fw_e(fw_t('EINST.L_CONTAINER')) ?><br>
-    <input data-role="none" type="text" size="14" name="g_container[<?= $fw_i ?>]" value="<?= fw_e($g['container']) ?>"></label></td>
+    <input data-role="none" type="text" size="14" name="g_container[<?= $fw_i ?>]" value="<?= fw_e(fw_ew('settings', "g_container[$fw_i]", $g['container'])) ?>"<?= fw_ek('settings', "g_container[$fw_i]") ?>></label></td>
   <td><label><?= fw_e(fw_t('EINST.L_USB_PFAD')) ?><br>
-    <input data-role="none" type="text" size="14" name="g_usb[<?= $fw_i ?>]" value="<?= fw_e($g['usb_pfad']) ?>"></label></td>
+    <input data-role="none" type="text" size="14" name="g_usb[<?= $fw_i ?>]" value="<?= fw_e(fw_ew('settings', "g_usb[$fw_i]", $g['usb_pfad'])) ?>"<?= fw_ek('settings', "g_usb[$fw_i]") ?>></label></td>
   <td><label><?= fw_e(fw_t('EINST.L_HUB')) ?><br>
-    <input data-role="none" type="text" size="8" name="g_hub[<?= $fw_i ?>]" value="<?= fw_e($g['hub']) ?>">
-    <input data-role="none" type="text" size="3" name="g_port[<?= $fw_i ?>]" value="<?= (int) $g['port'] ?>"></label></td>
+    <input data-role="none" type="text" size="8" name="g_hub[<?= $fw_i ?>]" value="<?= fw_e(fw_ew('settings', "g_hub[$fw_i]", $g['hub'])) ?>"<?= fw_ek('settings', "g_hub[$fw_i]") ?>>
+    <input data-role="none" type="text" size="3" name="g_port[<?= $fw_i ?>]" value="<?= fw_e(fw_ew('settings', "g_port[$fw_i]", (int) $g['port'])) ?>"<?= fw_ek('settings', "g_port[$fw_i]") ?>></label></td>
   <td><label><?= fw_e(fw_t('EINST.L_HOECHSTSTUFE')) ?><br>
-    <input data-role="none" type="text" size="3" name="g_stufe[<?= $fw_i ?>]" value="<?= (int) $g['hoechststufe'] ?>"></label></td>
+    <input data-role="none" type="text" size="3" name="g_stufe[<?= $fw_i ?>]" value="<?= fw_e(fw_ew('settings', "g_stufe[$fw_i]", (int) $g['hoechststufe'])) ?>"<?= fw_ek('settings', "g_stufe[$fw_i]") ?>></label></td>
 </tr>
 <tr>
   <td><label><?= fw_e(fw_t('EINST.L_FOLGE')) ?><br>
-    <select data-role="none" name="g_folge[<?= $fw_i ?>]">
-      <option value="normal"<?= $g['reihenfolge'] === 'normal' ? ' selected' : '' ?>><?= fw_e(fw_t('EINST.F_NORMAL')) ?></option>
-      <option value="usb_zuerst"<?= $g['reihenfolge'] === 'usb_zuerst' ? ' selected' : '' ?>><?= fw_e(fw_t('EINST.F_USB')) ?></option>
+    <select data-role="none" name="g_folge[<?= $fw_i ?>]"<?= fw_ek('settings', "g_folge[$fw_i]") ?>>
+      <option value="normal"<?= fw_ew('settings', "g_folge[$fw_i]", $g['reihenfolge']) === 'normal' ? ' selected' : '' ?>><?= fw_e(fw_t('EINST.F_NORMAL')) ?></option>
+      <option value="usb_zuerst"<?= fw_ew('settings', "g_folge[$fw_i]", $g['reihenfolge']) === 'usb_zuerst' ? ' selected' : '' ?>><?= fw_e(fw_t('EINST.F_USB')) ?></option>
     </select></label></td>
   <td><label><?= fw_e(fw_t('EINST.L_RUHE_S')) ?><br>
-    <input data-role="none" type="text" size="5" name="g_ruhe[<?= $fw_i ?>]" value="<?= (int) $g['ruhe_s'] ?>"></label></td>
+    <input data-role="none" type="text" size="5" name="g_ruhe[<?= $fw_i ?>]" value="<?= fw_e(fw_ew('settings', "g_ruhe[$fw_i]", (int) $g['ruhe_s'])) ?>"<?= fw_ek('settings', "g_ruhe[$fw_i]") ?>></label></td>
   <td><label><?= fw_e(fw_t('EINST.L_ABSTAND_S')) ?><br>
-    <input data-role="none" type="text" size="6" name="g_abstand[<?= $fw_i ?>]" value="<?= (int) $g['abstand_s'] ?>"></label></td>
+    <input data-role="none" type="text" size="6" name="g_abstand[<?= $fw_i ?>]" value="<?= fw_e(fw_ew('settings', "g_abstand[$fw_i]", (int) $g['abstand_s'])) ?>"<?= fw_ek('settings', "g_abstand[$fw_i]") ?>></label></td>
   <td><label><?= fw_e(fw_t('EINST.L_JE_TAG')) ?><br>
-    <input data-role="none" type="text" size="3" name="g_tag[<?= $fw_i ?>]" value="<?= (int) $g['je_tag'] ?>"></label></td>
+    <input data-role="none" type="text" size="3" name="g_tag[<?= $fw_i ?>]" value="<?= fw_e(fw_ew('settings', "g_tag[$fw_i]", (int) $g['je_tag'])) ?>"<?= fw_ek('settings', "g_tag[$fw_i]") ?>></label></td>
   <td></td>
 </tr>
 <tr>
-  <td><label><input data-role="none" type="checkbox" name="g_aktiv[<?= $fw_i ?>]" value="1"<?= $g['aktiv'] ? ' checked' : '' ?>> <?= fw_e(fw_t('EINST.L_AKTIV')) ?></label></td>
-  <td><label><input data-role="none" type="checkbox" name="g_heilen[<?= $fw_i ?>]" value="1"<?= $g['heilen'] ? ' checked' : '' ?>> <?= fw_e(fw_t('EINST.L_HEILEN')) ?></label></td>
-  <td><label><input data-role="none" type="checkbox" name="g_wachstum[<?= $fw_i ?>]" value="1"<?= $g['wachstum'] ? ' checked' : '' ?>> <?= fw_e(fw_t('EINST.L_WACHSTUM')) ?></label></td>
-  <td><label><input data-role="none" type="checkbox" name="g_dienstnach[<?= $fw_i ?>]" value="1"<?= $g['dienst_nach'] ? ' checked' : '' ?>> <?= fw_e(fw_t('EINST.L_DIENSTNACH')) ?></label></td>
-  <td><label><input data-role="none" type="checkbox" name="g_lernen[<?= $fw_i ?>]" value="1"<?= $g['lernen'] ? ' checked' : '' ?>> <?= fw_e(fw_t('EINST.L_LERNEN')) ?></label></td>
+  <td><label><input data-role="none" type="checkbox" name="g_aktiv[<?= $fw_i ?>]" value="1"<?= fw_eh('settings', "g_aktiv[$fw_i]", $g['aktiv']) ? ' checked' : '' ?>> <?= fw_e(fw_t('EINST.L_AKTIV')) ?></label></td>
+  <td><label><input data-role="none" type="checkbox" name="g_heilen[<?= $fw_i ?>]" value="1"<?= fw_ek('settings', "g_heilen[$fw_i]") ?><?= fw_eh('settings', "g_heilen[$fw_i]", $g['heilen']) ? ' checked' : '' ?>> <?= fw_e(fw_t('EINST.L_HEILEN')) ?></label></td>
+  <td><label><input data-role="none" type="checkbox" name="g_wachstum[<?= $fw_i ?>]" value="1"<?= fw_eh('settings', "g_wachstum[$fw_i]", $g['wachstum']) ? ' checked' : '' ?>> <?= fw_e(fw_t('EINST.L_WACHSTUM')) ?></label></td>
+  <td><label><input data-role="none" type="checkbox" name="g_dienstnach[<?= $fw_i ?>]" value="1"<?= fw_eh('settings', "g_dienstnach[$fw_i]", $g['dienst_nach']) ? ' checked' : '' ?>> <?= fw_e(fw_t('EINST.L_DIENSTNACH')) ?></label></td>
+  <td><label><input data-role="none" type="checkbox" name="g_lernen[<?= $fw_i ?>]" value="1"<?= fw_eh('settings', "g_lernen[$fw_i]", $g['lernen']) ? ' checked' : '' ?>> <?= fw_e(fw_t('EINST.L_LERNEN')) ?></label></td>
 </tr>
 </table>
 </div>
@@ -970,46 +1184,46 @@ if ($fw_rahmen) {
 <h2><?= fw_e(fw_t('EINST.H_BETRIEB')) ?></h2>
 <div class="sm-feld">
   <label for="fw_takt"><?= fw_e(fw_t('EINST.L_TAKT')) ?></label>
-  <input data-role="none" type="text" id="fw_takt" name="takt" value="<?= (int) $fw_cfg['takt'] ?>">
+  <input data-role="none" type="text" id="fw_takt" name="takt" value="<?= fw_e(fw_ew('settings', 'takt', (int) $fw_cfg['takt'])) ?>"<?= fw_ek('settings', 'takt') ?>>
   <p class="sm-hilfe"><?= fw_t('EINST.H_TAKT') ?></p>
 </div>
 <div class="sm-feld">
   <label for="fw_anlauf"><?= fw_e(fw_t('EINST.L_ANLAUF_S')) ?></label>
-  <input data-role="none" type="text" id="fw_anlauf" name="anlauf_s" value="<?= (int) $fw_cfg['anlauf_s'] ?>">
+  <input data-role="none" type="text" id="fw_anlauf" name="anlauf_s" value="<?= fw_e(fw_ew('settings', 'anlauf_s', (int) $fw_cfg['anlauf_s'])) ?>"<?= fw_ek('settings', 'anlauf_s') ?>>
   <p class="sm-hilfe"><?= fw_t('EINST.H_ANLAUF') ?></p>
 </div>
 <div class="sm-feld">
   <label for="fw_ruhevon"><?= fw_e(fw_t('EINST.L_RUHEFENSTER')) ?></label>
-  <input data-role="none" type="text" id="fw_ruhevon" name="ruhe_von" size="5" value="<?= fw_e($fw_cfg['ruhe_von']) ?>">
-  <input data-role="none" type="text" name="ruhe_bis" size="5" value="<?= fw_e($fw_cfg['ruhe_bis']) ?>">
+  <input data-role="none" type="text" id="fw_ruhevon" name="ruhe_von" size="5" value="<?= fw_e(fw_ew('settings', 'ruhe_von', $fw_cfg['ruhe_von'])) ?>"<?= fw_ek('settings', 'ruhe_von') ?>>
+  <input data-role="none" type="text" name="ruhe_bis" size="5" value="<?= fw_e(fw_ew('settings', 'ruhe_bis', $fw_cfg['ruhe_bis'])) ?>"<?= fw_ek('settings', 'ruhe_bis') ?>>
   <p class="sm-hilfe"><?= fw_t('EINST.H_RUHEFENSTER') ?></p>
 </div>
 <div class="sm-feld">
-  <label><input data-role="none" type="checkbox" name="global_aus" value="1"<?= $fw_cfg['global_aus'] ? ' checked' : '' ?>> <?= fw_e(fw_t('EINST.L_GLOBAL_AUS')) ?></label>
+  <label><input data-role="none" type="checkbox" name="global_aus" value="1"<?= fw_eh('settings', 'global_aus', $fw_cfg['global_aus']) ? ' checked' : '' ?>> <?= fw_e(fw_t('EINST.L_GLOBAL_AUS')) ?></label>
   <p class="sm-hilfe"><?= fw_t('EINST.H_GLOBAL_AUS') ?></p>
 </div>
 <div class="sm-feld">
   <label for="fw_logkb"><?= fw_e(fw_t('EINST.L_LOG_KB')) ?></label>
-  <input data-role="none" type="text" id="fw_logkb" name="log_kb" value="<?= (int) $fw_cfg['log_kb'] ?>">
+  <input data-role="none" type="text" id="fw_logkb" name="log_kb" value="<?= fw_e(fw_ew('settings', 'log_kb', (int) $fw_cfg['log_kb'])) ?>"<?= fw_ek('settings', 'log_kb') ?>>
   <p class="sm-hilfe"><?= fw_t('EINST.H_LOG_KB') ?></p>
 </div>
 <div class="sm-feld">
   <label for="fw_vtage"><?= fw_e(fw_t('EINST.L_VERLAUF_TAGE')) ?></label>
-  <input data-role="none" type="text" id="fw_vtage" name="verlauf_tage" value="<?= (int) $fw_cfg['verlauf_tage'] ?>">
+  <input data-role="none" type="text" id="fw_vtage" name="verlauf_tage" value="<?= fw_e(fw_ew('settings', 'verlauf_tage', (int) $fw_cfg['verlauf_tage'])) ?>"<?= fw_ek('settings', 'verlauf_tage') ?>>
   <p class="sm-hilfe"><?= fw_t('EINST.H_VERLAUF_TAGE') ?></p>
 </div>
 
 <h2><?= fw_e(fw_t('MELD.H')) ?></h2>
 <div class="sm-step"><?= fw_t('MELD.ERKLAERUNG') ?></div>
 <div class="sm-feld">
-  <label><input data-role="none" type="checkbox" name="melden_aktiv" value="1"<?= $fw_cfg['melden_aktiv'] ? ' checked' : '' ?>> <?= fw_e(fw_t('MELD.L_ZENTRUM')) ?></label>
+  <label><input data-role="none" type="checkbox" name="melden_aktiv" value="1"<?= fw_eh('settings', 'melden_aktiv', $fw_cfg['melden_aktiv']) ? ' checked' : '' ?>> <?= fw_e(fw_t('MELD.L_ZENTRUM')) ?></label>
 </div>
 <div class="sm-feld">
-  <label><input data-role="none" type="checkbox" name="signal_ein" value="1"<?= $fw_cfg['signal_ein'] ? ' checked' : '' ?>> <?= fw_e(fw_t('MELD.L_SIGNAL')) ?></label>
+  <label><input data-role="none" type="checkbox" name="signal_ein" value="1"<?= fw_eh('settings', 'signal_ein', $fw_cfg['signal_ein']) ? ' checked' : '' ?>> <?= fw_e(fw_t('MELD.L_SIGNAL')) ?></label>
 </div>
 <div class="sm-feld">
   <label for="fw_sigurl"><?= fw_e(fw_t('MELD.L_SIGNAL_URL')) ?></label>
-  <input data-role="none" type="text" id="fw_sigurl" name="signal_url" size="70" value="<?= fw_e($fw_cfg['signal_url']) ?>">
+  <input data-role="none" type="text" id="fw_sigurl" name="signal_url" size="70" value="<?= fw_e(fw_ew('settings', 'signal_url', $fw_cfg['signal_url'])) ?>"<?= fw_ek('settings', 'signal_url') ?>>
   <p class="sm-hilfe"><?= fw_t('MELD.H_SIGNAL_URL') ?></p>
 </div>
 
@@ -1047,6 +1261,14 @@ if ($fw_rahmen) {
 <span><i class="sm-punkt sm-b-technik"></i> <?= fw_t('LEGENDE.TECHNIK_SICHERN') ?></span>
 <span><i class="sm-punkt sm-b-aktion"></i> <?= fw_t('LEGENDE.AKTION_ZURUECK') ?></span>
 </div>
+<?php
+/* X-3 (Welle 4): besteht die eigene Sicherung das eigene Zurueckspielen?
+ * Dieselbe Pruefung (fw_sicherung_pruefen). Eine Warnung - der Knopf
+ * liefert die Datei trotzdem, mit _warnung im Kopf. */
+$fw_sich_mangel = fw_sicherung_selbstpruefung();
+if ($fw_sich_mangel) { ?>
+<div class="sm-warnung" id="fw_sich_warnung"><b><?= fw_e(fw_t('SICH.SELBST_WARN')) ?></b><br><?= implode('<br>', array_map('fw_e', $fw_sich_mangel)) ?></div>
+<?php } ?>
 <div class="sm-knopfreihe">
   <form action="index.php" method="post">
     <input data-role="none" type="hidden" name="activetab" value="tab-settings">
@@ -1090,11 +1312,11 @@ if ($fw_rahmen) {
 <input data-role="none" type="hidden" name="activetab" value="tab-mqtt">
 <input data-role="none" type="hidden" name="fmt" value="<?= fw_e($fw_merkmal) ?>">
 <div class="sm-feld">
-  <label><input data-role="none" type="checkbox" name="mqtt_ein" value="1"<?= $fw_cfg['mqtt_ein'] ? ' checked' : '' ?>> <?= fw_e(fw_t('MQTT.EIN')) ?></label>
+  <label><input data-role="none" type="checkbox" name="mqtt_ein" value="1"<?= fw_eh('mqtt', 'mqtt_ein', $fw_cfg['mqtt_ein']) ? ' checked' : '' ?>> <?= fw_e(fw_t('MQTT.EIN')) ?></label>
 </div>
 <div class="sm-feld">
   <label for="fw_thema"><?= fw_e(fw_t('MQTT.THEMA')) ?></label>
-  <input data-role="none" type="text" id="fw_thema" name="mqtt_topic" value="<?= fw_e($fw_cfg['mqtt_topic']) ?>">
+  <input data-role="none" type="text" id="fw_thema" name="mqtt_topic" value="<?= fw_e(fw_ew('mqtt', 'mqtt_topic', $fw_cfg['mqtt_topic'])) ?>"<?= fw_ek('mqtt', 'mqtt_topic') ?>>
   <p class="sm-hilfe"><?= fw_t('MQTT.THEMA_HILFE') ?></p>
 </div>
 
@@ -1102,15 +1324,15 @@ if ($fw_rahmen) {
 <div class="sm-step"><?= fw_t('MQTT.MITHOERER_ERKLAERUNG') ?></div>
 <div class="sm-feld">
   <label for="fw_bhost"><?= fw_e(fw_t('MQTT.L_HOST')) ?></label>
-  <input data-role="none" type="text" id="fw_bhost" name="broker_host" value="<?= fw_e($fw_cfg['broker_host']) ?>">
-  <input data-role="none" type="text" name="broker_port" size="6" value="<?= fw_e($fw_cfg['broker_port']) ?>">
+  <input data-role="none" type="text" id="fw_bhost" name="broker_host" value="<?= fw_e(fw_ew('mqtt', 'broker_host', $fw_cfg['broker_host'])) ?>"<?= fw_ek('mqtt', 'broker_host') ?>>
+  <input data-role="none" type="text" name="broker_port" size="6" value="<?= fw_e(fw_ew('mqtt', 'broker_port', $fw_cfg['broker_port'])) ?>"<?= fw_ek('mqtt', 'broker_port') ?>>
   <p class="sm-hilfe"><?= sprintf(fw_t('MQTT.H_HOST'),
       fw_e($fw_mqtt['broker'] !== '' ? $fw_mqtt['broker'] : '127.0.0.1'),
       (int) ($fw_mqtt['brokerport'] ? $fw_mqtt['brokerport'] : 1883)) ?></p>
 </div>
 <div class="sm-feld">
   <label for="fw_buser"><?= fw_e(fw_t('MQTT.L_USER')) ?></label>
-  <input data-role="none" type="text" id="fw_buser" name="broker_user" value="<?= fw_e($fw_cfg['broker_user']) ?>">
+  <input data-role="none" type="text" id="fw_buser" name="broker_user" value="<?= fw_e(fw_ew('mqtt', 'broker_user', $fw_cfg['broker_user'])) ?>"<?= fw_ek('mqtt', 'broker_user') ?>>
 </div>
 <div class="sm-feld">
   <label for="fw_bpass"><?= fw_e(fw_t('MQTT.L_PASS')) ?></label>
@@ -1121,7 +1343,7 @@ if ($fw_rahmen) {
 </div>
 <div class="sm-feld">
   <label for="fw_bid"><?= fw_e(fw_t('MQTT.L_ID')) ?></label>
-  <input data-role="none" type="text" id="fw_bid" name="broker_id" value="<?= fw_e($fw_cfg['broker_id']) ?>">
+  <input data-role="none" type="text" id="fw_bid" name="broker_id" value="<?= fw_e(fw_ew('mqtt', 'broker_id', $fw_cfg['broker_id'])) ?>"<?= fw_ek('mqtt', 'broker_id') ?>>
   <p class="sm-hilfe"><?= fw_t('MQTT.H_ID') ?></p>
 </div>
 
@@ -1466,6 +1688,7 @@ if ($fw_rahmen) {
   <form action="index.php" method="post">
     <input data-role="none" type="hidden" name="activetab" value="tab-log">
     <input data-role="none" type="hidden" name="fmt" value="<?= fw_e($fw_merkmal) ?>">
+    <label class="sm-haken"><input data-role="none" type="checkbox" name="sicher_log" value="1"> <?= fw_e(fw_t('LOG.SICHER')) ?></label>
     <button data-role="none" class="sm-btn sm-b-aktion" type="submit" name="log_leeren" value="1"><?= fw_e(fw_t('LOG.K_LEEREN')) ?></button>
   </form>
 </div>

@@ -4,10 +4,35 @@
 Merkt, wenn ein Stick verstummt, weckt ihn in Stufen wieder auf — und misst
 nach, ob es geholfen hat.
 
-Version 1.0.8 · LoxBerry ab 3.0 · PHP 7.4 und 8.x · Python 3 mit paho-mqtt
+Version 1.0.9 · LoxBerry ab 3.0 · PHP 7.4 und 8.x · Python 3 mit paho-mqtt
 (Debian-Paket, über `dpkg/apt`)
 
 ---
+
+## Neu in 1.0.9
+
+Welle 4 der Verbesserungsliste (`Pruefung-Durchgang-2026-09-29/VERBESSERUNGEN_OFFEN.md`, Entscheidungen 16, 19 und 21).
+Gemessen mit Attrappen unter PHP 7.4, 8.3 und 8.5; nicht am Funkstick.
+
+* **Kennung Pflicht ab Stufe 2/3:** Ein Gerät mit Stufe 2 oder 3 ohne Kennung wird
+  beim Speichern beanstandet, und der Wächter lehnt diese Stufe ab (bisher löste
+  er unbind/bind bzw. uhubctl aus).
+* **Strengere Dienstnamen:** `.versteckt`, `@x`, `x@`, `systemd`,
+  `x.service.service` werden beanstandet; der Wächter setzt dafür keinen
+  Neustart mehr ab.
+* Hinweis schon beim Speichern, wenn der Wächter die Stufe 3 an einem
+  Wurzelverteiler ablehnen würde.
+* „Protokoll leeren“ nur noch mit Bestätigungshaken.
+* Art „Docker“: Fehlt Docker oder der Zugriff, verweist die Oberfläche auf das
+  Plugin [Docker NG](https://github.com/timanders22/LoxBerry-Plugin-Docker-NG).
+* Die Vorlage „Zigbee2MQTT über MQTT“ meldet nur (Heilen ab Werk aus).
+* **Wartung aus Loxone:** Derselbe Wert innerhalb von 60 s ergibt `UNVERAENDERT=1`;
+  `dauer=abc` oder `dauer=5000` und `quittieren&nr=abc` werden mit 400
+  abgewiesen statt die Wartung auszuschalten bzw. alles zu quittieren.
+* **Nach einer Beanstandung wird nichts gespeichert,** die Eingaben kommen markiert
+  zurück; „Einstellungen sichern“ warnt bei auffälligen Werten.
+* **Neuinstallation:** neues `preinstall.sh`, Reste einer früheren Installation
+  kommen nicht mehr zurück.
 
 ## Neu in 1.0.8
 
@@ -280,6 +305,12 @@ Und der Neustartzähler von systemd oder Docker ist der einzige Wert, der einen
 Dienst verrät, den das System alle drei Minuten neu startet: nach dem
 Änderungsdatum seines Protokolls sieht der kerngesund aus.
 
+Die Art „Docker" braucht Docker und den Zugriff darauf; beides richtet das
+LoxBerry-Plugin [Docker NG](https://github.com/timanders22/LoxBerry-Plugin-Docker-NG)
+ein. Fehlt Docker oder der Zugriff, sagt es der Reiter *Einstellungen* —
+getrennt nach „fehlt" und „kein Zugriff". Die Funkwacht legt selbst keine
+Container an.
+
 ## Was sie nicht tut
 
 **Sie öffnet niemals selbst eine serielle Schnittstelle.** Eine solche
@@ -293,6 +324,14 @@ startet — und das tun viele LoxBerry-Installationen —, wäre sonst einen
 Tippfehler von einem abgehängten Wurzeldateisystem entfernt. Der Reiter *Test*
 zeigt diese Geräte in der USB-Liste **sichtbar gesperrt**, nicht erst später
 abgelehnt.
+
+**Sie setzt keinen Anschluss ohne Kennung zurück.** Stufe 2 und 3 verlangen
+die erwartete USB-Kennung (etwa `1a86:55d4`): die Oberfläche nimmt eine
+solche Zeile ohne Kennung nicht an, und der Wächter lehnt diese Stufen ohne
+Kennung ab. Sonst träfe ein USB-Reset auch ein fremdes Gerät, das jemand in
+denselben Anschluss gesteckt hat. Ein Verteiler, an dem der Wächter Stufe 3
+ablehnen würde (etwa der Wurzelverteiler oder einer, an dem die Systemplatte
+hängt), wird schon beim Speichern genannt.
 
 **Sie heilt nicht, wenn noch nie ein Lebenszeichen kam.** „Seit langem stumm"
 und „noch nie gehört" sind zwei verschiedene Zustände. Der zweite ist fast
@@ -376,6 +415,13 @@ Heilen für eine Weile an. Beide **schalten am Gerät nichts**; das eine erlaubt
 dem Wächter wieder zu urteilen, das andere hält ihn an. Dazu beantwortet der
 Endpunkt `?selftest=1`, ohne etwas auszulösen.
 
+Dieselbe Wartungsdauer innerhalb von 60 Sekunden wird nicht erneut
+beauftragt; die Antwort trägt dann `UNVERAENDERT=1` (ein flatternder
+Loxone-Ausgang verlängerte sonst die Wartung im Sekundentakt). Eine andere
+Dauer gilt sofort. `quittieren` ist ein Taster und wird nicht gebremst. Eine
+Dauer oder Nummer, die keine ist, wird mit 400 abgewiesen — nicht
+zurechtgebogen.
+
 ## Einrichten, ohne zu raten
 
 Der Reiter *Test* listet auf Knopfdruck die **USB-Geräte** dieses Rechners —
@@ -387,7 +433,17 @@ Im Reiter *Einstellungen* füllt ein Klick eine Zeile mit **fertigen
 Vorschlagswerten** für die bekannten Fälle. Diese Pfade sind Vorschläge aus
 der Erfahrung, keine Messwerte — deshalb steht neben jeder Zeile ein Knopf
 **„Jetzt messen"**, der genau diese eine Zeile misst und das Ergebnis sofort
-zeigt.
+zeigt. Die Vorlage „Zigbee2MQTT über MQTT" (Thema `bridge/health`, 1500 s)
+meldet zunächst **nur**: Heilen ist ausgeschaltet und wird erst nach einer
+Woche Beobachtung von Hand eingeschaltet; der Dienst steht schon eingetragen.
+
+Beim Speichern wird nichts still zurechtgebogen. Ein Anführungszeichen, ein
+leeres Zahlfeld, ein Wert außerhalb der Auswahl oder ein leeres MQTT-Thema
+wird beanstandet; dann wird **nichts** gespeichert, das Feld ist markiert,
+und die eingetippten Werte stehen wieder im Formular. Still bleiben nur
+Leerraum am Rand und das Kleinschreiben des Themas. „Einstellungen
+herunterladen" warnt gelb, wenn eine gespeicherte Einstellung das eigene
+Zurückspielen nicht bestünde, und liefert die Datei trotzdem.
 
 Und weil man das Heilen sonst nur durch einen echten Ausfall prüfen kann, gibt
 es zwei Wege: **„Was würde jetzt geschehen?"** druckt je Stick das Urteil und
@@ -448,13 +504,15 @@ Der Reiter *Test* sagt es **je Befehl einzeln** — ein pauschales
 
 Es gibt bewusst kein `sh -c` in der Befehlskette. Der USB-Pfad und die
 Verteilerkennung werden gegen ein Muster geprüft und bei Abweichung
-**abgewiesen**, nicht zurechtgebogen. Jedes Formular der Oberfläche trägt ein
+**abgewiesen**, nicht zurechtgebogen. Ebenso Dienstnamen: einer, der mit
+Punkt, `@` oder Unterstrich beginnt, eine doppelte Endung wie
+`.service.service` oder eine Vorlage ohne Instanz wird nicht angenommen. Jedes Formular der Oberfläche trägt ein
 aus dem Wortzeichen abgeleitetes Merkmal, und ein Wachposten prüft es vor
 allen Handlern.
 
-**Drei Knöpfe verlangen ein Häkchen**, weil sich ihre Wirkung nicht
-zurücknehmen lässt: ein neues Wortzeichen, das Verwerfen der Stufenstatistik
-und das Zurückspielen einer Sicherung. Ohne Häkchen geschieht **nichts**, und
+**Vier Knöpfe verlangen ein Häkchen**, weil sich ihre Wirkung nicht
+zurücknehmen lässt: ein neues Wortzeichen, das Verwerfen der Stufenstatistik,
+das Leeren des Protokolls und das Zurückspielen einer Sicherung. Ohne Häkchen geschieht **nichts**, und
 die Oberfläche sagt das auch — ein Knopf, der stumm nichts tut, wäre
 schlimmer. Geprüft wird das Häkchen **vor** allem anderen; einen halb
 zurückgespielten Zustand kann es damit nicht geben. Daneben steht jeweils,
@@ -465,7 +523,7 @@ sein Schaden.
 
 * Reiter *Test*, Knopf **Selbstprüfung** — neunzehn Fragen mit Haken, Kreuz
   oder „hier lässt sich nichts messen".
-* `python3 bin/funkwacht_dienst.py --selbsttest` — 122 Fälle: Rechenkern,
+* `python3 bin/funkwacht_dienst.py --selbsttest` — 151 Fälle: Rechenkern,
   Retain je Thema, eigene Themen beim Abräumen, Fassungsquelle; ohne Netz
   und ohne Geräte.
 * `python3 bin/funkwacht_dienst.py --themen` — jedes gesendete Thema mit

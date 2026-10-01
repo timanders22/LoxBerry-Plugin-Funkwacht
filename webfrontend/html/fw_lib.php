@@ -120,7 +120,7 @@ function fw_paths($neu = false)
         $p = array('home' => '', 'plugin' => $dir);
         foreach (array('configdir', 'config', 'sicherung', 'datadir', 'stand', 'historie',
                        'auftraege', 'mqttstand', 'verlauf', 'bestand', 'logdir', 'log',
-                       'dienstlog', 'bindir', 'altpraefix', 'einmal') as $fw_k) {
+                       'dienstlog', 'bindir', 'altpraefix', 'einmal', 'gleichwert') as $fw_k) {
             $p[$fw_k] = '';
         }
         return $p;
@@ -144,6 +144,8 @@ function fw_paths($neu = false)
         'altpraefix' => $basis . '/data/plugins/' . $dir . '/mqtt_altpraefix.json',
         /* U8: das Ergebnis eines POST fuer den folgenden GET (0600). */
         'einmal'    => $basis . '/data/plugins/' . $dir . '/einmalmeldung.json',
+        /* X-7 (Welle 4): der zuletzt angenommene Sollwert je Befehl. */
+        'gleichwert' => $basis . '/data/plugins/' . $dir . '/gleichwert.json',
         'verlauf'   => $basis . '/data/plugins/' . $dir . '/verlauf',
         /* NEBEN dem Datenordner - der Installer loescht data/plugins/<x>/
          * bei jedem Update, den Nachbarn mit dem Punkt trifft er nicht. */
@@ -265,9 +267,12 @@ function fw_vorlagen()
              * S3 (Pruefung 29.09.2026): kein zweites Kriterium. Bis Stufe 1
              * stand hier art2 'usb' mit leerem pfad2 - eine Zeile, die das
              * Formular beanstandet und die das Zurueckspielen abweist. */
+            /* c1 (Entscheidung 16, Welle 4): zunaechst NUR MELDEN - Heilen
+             * ab Werk aus. Eingeschaltet wird es nach einer Woche
+             * Beobachtung von Hand; der Dienst steht schon da. */
             'werte' => array('art' => 'mqtt', 'thema' => 'zigbee2mqtt/bridge/health',
                              'art2' => '', 'pfad2' => '', 'verkn' => 'oder',
-                             'dienst' => 'zigbee2mqtt',
+                             'dienst' => 'zigbee2mqtt', 'heilen' => 0,
                              'hoechstalter' => 1500, 'hoechststufe' => 2),
         ),
         'z2m_docker' => array(
@@ -1341,7 +1346,7 @@ function fw_felder_kongruent()
  * Anfang des Namens. Die sudo-Regel "systemctl restart *" erlaubt jede
  * Einheit; die Einschraenkung leistet das Plugin, nicht sudo. */
 define('FW_EINHEIT_TABU', array('reboot', 'poweroff', 'halt', 'shutdown', 'kexec',
-    'rescue', 'emergency', 'ssh', 'sshd', 'apache2', 'cron', 'systemd-*', 'dbus',
+    'rescue', 'emergency', 'ssh', 'sshd', 'apache2', 'cron', 'systemd', 'systemd-*', 'dbus',
     'mosquitto', 'lbdefaults', 'loxberry*'));
 
 /** Die Zahlenfelder je Stick: Formularfeld, von, bis. */
@@ -1396,7 +1401,8 @@ function fw_steuerzeichen($s)
 
 /**
  * Einen systemd-Einheitennamen pruefen (D5). Rueckgabe: '' oder ein Kuerzel
- * des Grundes ('leer', 'zeichen', 'strich', 'endung', 'tabu:<eintrag>').
+ * des Grundes ('leer', 'zeichen', 'strich', 'anfang', 'endung', 'doppelt',
+ * 'vorlage', 'tabu:<eintrag>').
  * Erlaubt: [A-Za-z0-9@._-], kein fuehrendes -, Endung .service oder keine
  * (dann haengt der Waechter .service an). Dieselbe Rechnung wie
  * einheit_pruefen() in bin/fw_pruef.py.
@@ -1406,6 +1412,10 @@ function fw_einheit_pruefen($e)
     if (!is_string($e) || $e === '') { return 'leer'; }
     if (!preg_match('/^[A-Za-z0-9@._\-]+$/', $e)) { return 'zeichen'; }
     if ($e[0] === '-') { return 'strich'; }
+    /* a2 (Welle 4, 01.10.2026): ".versteckt", "@x" und "_x" meint niemand
+     * als Einheit - bis 1.0.9 gingen sie durch und scheiterten erst an
+     * systemctl. */
+    if (!preg_match('/^[A-Za-z0-9]/', $e)) { return 'anfang'; }
     $basis = $e;
     if (substr($basis, -8) === '.service') {
         $basis = substr($basis, 0, -8);
@@ -1413,6 +1423,16 @@ function fw_einheit_pruefen($e)
         return 'endung';
     }
     if ($basis === '') { return 'leer'; }
+    /* a2: "x.service.service" - die Endung steht doppelt. */
+    if (preg_match('/\.(service|target|socket|mount|automount|swap|path|timer|slice|scope|device)$/', $basis)) {
+        return 'doppelt';
+    }
+    /* a2: eine Vorlage braucht genau ein @ und eine Instanz dahinter
+     * (getty@tty1); "x@" laesst sich nicht neu starten. */
+    if (strpos($basis, '@') !== false
+        && (substr_count($basis, '@') > 1 || substr($basis, -1) === '@')) {
+        return 'vorlage';
+    }
     $at = strpos($basis, '@');
     $vorn = strtolower($at === false ? $basis : substr($basis, 0, $at));
     foreach (FW_EINHEIT_TABU as $t) {
@@ -1454,43 +1474,68 @@ function fw_token_gueltig($t)
  * Speichern beanstandet. $g traegt schon die richtigen Typen. Rueckgabe:
  * Liste der Beanstandungen, leer heisst gueltig.
  */
-function fw_geraet_pruefen($g, $nr)
+function fw_geraet_pruefen($g, $nr, &$felder = array())
 {
+    /* X-2 (Welle 4): $felder sammelt die Schluessel der beanstandeten
+     * Felder, damit die Oberflaeche genau diese markiert. */
     $f = array();
     /* D5: auch in einer Zeile ohne Namen - der Name kann spaeter kommen. */
     if ($g['dienst'] !== '') {
         $grund = fw_einheit_pruefen($g['dienst']);
         if ($grund !== '') {
             $f[] = sprintf(fw_t('FEHLER.EINHEIT'), $nr, $g['dienst'], fw_einheit_grund($grund));
+            $felder[] = 'dienst';
         }
     }
     if ($g['container'] !== '' && fw_container_pruefen($g['container']) !== '') {
         $f[] = sprintf(fw_t('FEHLER.CONTAINER'), $nr, $g['container']);
+        $felder[] = 'container';
     }
     $leer = ($g['name'] === '' && $g['pfad'] === '' && $g['thema'] === '');
     if ($leer) { return $f; }
     if ($g['name'] === '') {
         $f[] = sprintf(fw_t('FEHLER.NAME_FEHLT'), $nr);
+        $felder[] = 'name';
     }
     foreach (array(array($g['art'], $g['pfad'], $g['thema'], ''),
                    array($g['art2'], $g['pfad2'], $g['thema2'], '2')) as $k) {
         if ($k[0] === '') { continue; }
         if ($k[0] === 'mqtt' && $k[2] === '') {
             $f[] = sprintf(fw_t('FEHLER.THEMA_FEHLT'), $nr);
+            $felder[] = 'thema' . $k[3];
         }
         if ($k[0] !== 'mqtt' && $k[1] === ''
             && !in_array($k[0], array('dienst', 'docker'), true)) {
             $f[] = sprintf(fw_t('FEHLER.PFAD_FEHLT'), $nr);
+            $felder[] = 'pfad' . $k[3];
         }
     }
     if ($g['art'] === 'dienst' && $g['pfad'] === '' && $g['dienst'] === '') {
         $f[] = sprintf(fw_t('FEHLER.DIENST_FEHLT'), $nr);
+        $felder[] = 'dienst';
     }
     if ($g['art'] === 'docker' && $g['pfad'] === '' && $g['container'] === '') {
         $f[] = sprintf(fw_t('FEHLER.CONTAINER_FEHLT'), $nr);
+        $felder[] = 'container';
     }
-    if ($g['kennung'] !== '' && !preg_match('/^[0-9a-f]{4}:[0-9a-f]{4}$/', $g['kennung'])) {
+    /* Gross- oder Kleinbuchstaben: der Waechter vergleicht ohne Ruecksicht
+     * darauf. Bis 1.0.9 schrieb das Formular die Kennung still klein
+     * (Nr. 19, Welle 4) - jetzt bleibt sie, wie sie eingetippt ist. */
+    if ($g['kennung'] !== '' && !preg_match('/^[0-9a-f]{4}:[0-9a-f]{4}$/i', $g['kennung'])) {
         $f[] = sprintf(fw_t('FEHLER.KENNUNG'), $nr, $g['kennung']);
+        $felder[] = 'kennung';
+    }
+    /* a3 (Entscheidung 16, Welle 4): sobald Stufe 2 oder 3 eingeschaltet
+     * ist (Heilen an, Hoechststufe reicht hin, USB-Pfad bzw. Verteiler
+     * eingetragen), ist die erwartete Kennung Pflicht. Ohne sie setzte der
+     * Waechter auch ein fremdes Geraet zurueck, das jemand in denselben
+     * Anschluss gesteckt hat; er lehnt Stufe 2/3 ohne Kennung seit dieser
+     * Fassung ab (kennung_abweichung in bin/funkwacht_dienst.py). */
+    $fw_st2 = $g['heilen'] && $g['hoechststufe'] >= 2 && $g['usb_pfad'] !== '';
+    $fw_st3 = $g['heilen'] && $g['hoechststufe'] >= 3 && $g['hub'] !== '';
+    if (($fw_st2 || $fw_st3) && $g['kennung'] === '') {
+        $f[] = sprintf(fw_t('FEHLER.KENNUNG_PFLICHT'), $nr);
+        $felder[] = 'kennung';
     }
     /* Heilen ohne einen einzigen Hebel ist ein eingeschalteter
      * Schalter, der nichts tut. Lieber jetzt sagen. */
@@ -1498,17 +1543,179 @@ function fw_geraet_pruefen($g, $nr)
         && $g['dienst'] === '' && $g['container'] === ''
         && $g['usb_pfad'] === '' && $g['hub'] === '') {
         $f[] = sprintf(fw_t('FEHLER.KEIN_HEBEL'), $nr);
+        $felder[] = 'heilen';
     }
     if ($g['hoechststufe'] >= 3 && ($g['hub'] === '' || $g['port'] <= 0)) {
         $f[] = sprintf(fw_t('FEHLER.UHUBCTL_UNVOLLSTAENDIG'), $nr);
+        $felder[] = 'hub';
+        $felder[] = 'port';
     }
     /* Die Erholungszeit laenger als der Mindestabstand hiesse: der
      * Stick gilt bis zum naechsten erlaubten Versuch als gesund und
      * es wird nie wieder geheilt. Melden, nicht zurechtbiegen. */
     if ($g['ruhe_s'] >= $g['abstand_s']) {
         $f[] = sprintf(fw_t('FEHLER.RUHE_ZU_LANG'), $nr, $g['ruhe_s'], $g['abstand_s']);
+        $felder[] = 'ruhe_s';
+        $felder[] = 'abstand_s';
     }
     return $f;
+}
+
+/* ==================================================================
+ * a1 (Welle 4, 01.10.2026): Stufe 3 schon beim Speichern beurteilen
+ *
+ * Bis 1.0.9 sah man erst zur Laufzeit - als Ablehnung im Protokoll -, dass
+ * der Waechter einen Verteiler sperrt (etwa den Wurzelverteiler "2" am
+ * Raspberry Pi 4). Dieselbe Rechnung wie ist_systemgeraet() und
+ * verteiler_sperre() in bin/fw_pruef.py; die Systemgeraete legt der
+ * Waechter in jedem Durchlauf als 'tabu' in stand.json ab. Ohne stand.json
+ * (Waechter lief noch nie) werden nur Wurzelverteiler und Form geprueft.
+ * ================================================================== */
+
+function fw_ist_systemgeraet($u, $tabu)
+{
+    $u = trim((string) $u);
+    if ($u === '') { return false; }
+    foreach ((array) $tabu as $s) {
+        $s = trim(is_string($s) ? $s : '');
+        if ($s === '') { continue; }
+        if ($u === $s || strpos($u, $s . ':') === 0 || strpos($u, $s . '.') === 0
+            || strpos($s, $u . ':') === 0) {
+            return true;
+        }
+    }
+    return false;
+}
+
+/** '' oder der Grund (Satz), warum der Waechter Stufe 3 hier ablehnen wuerde. */
+function fw_verteiler_sperre($hub, $port, $tabu)
+{
+    $h = trim((string) $hub);
+    $tabu = array_values(array_filter((array) $tabu, 'is_string'));
+    if (preg_match('/^[0-9]+$/', $h)) {
+        return sprintf(fw_t('EINST.VT_WURZEL'), $h);
+    }
+    if (!preg_match('/^[0-9]+-[0-9]+(\.[0-9]+)*$/', $h)) {
+        return sprintf(fw_t('EINST.VT_FORM'), $h);
+    }
+    $ziel = $h . '.' . (int) $port;
+    if (fw_ist_systemgeraet($h, $tabu) || fw_ist_systemgeraet($ziel, $tabu)) {
+        return sprintf(fw_t('EINST.VT_SYSTEM'), $ziel, implode(', ', $tabu));
+    }
+    foreach ($tabu as $s) {
+        $s = trim($s);
+        if ($s !== '' && (strpos($s, $h . '.') === 0 || strpos($s, $h . ':') === 0)) {
+            return sprintf(fw_t('EINST.VT_NACHBAR'), $h, $s);
+        }
+    }
+    return '';
+}
+
+/* ==================================================================
+ * Docker-2 (Welle 4): Ist Docker da und ansprechbar?
+ *
+ * Die Art "Docker" fragt "docker inspect" OHNE sudo. Fehlt Docker oder
+ * fehlt dem Benutzer loxberry der Zugriff, meldete die Zeile bis 1.0.9 nur
+ * "docker inspect antwortet nicht". Rueckgabe array(lage, grund) mit lage
+ * ok | fehlt | kein_zugriff; grund ist schlichter Text (nicht maskiert).
+ * Bauart mt_docker_lage() (Matter2Lox 0.9.34): "docker info" mit Frist.
+ * Die Funkwacht legt keine Container an - sie verweist auf Docker NG.
+ * ================================================================== */
+
+function fw_docker_lage($sekunden = 5)
+{
+    $da = array();
+    @exec('command -v docker 2>/dev/null', $da);
+    if (!$da) {
+        return array('fehlt', '');
+    }
+    $sekunden = max(1, (int) $sekunden);
+    $aus = array();
+    $rc = 0;
+    @exec('timeout -k 2 ' . $sekunden . ' docker info --format '
+          . escapeshellarg('{{.ServerVersion}}') . ' 2>&1', $aus, $rc);
+    if ($rc === 0) {
+        return array('ok', '');
+    }
+    $t = strtolower(trim(implode(' ', $aus)));
+    if ($rc === 124 || $rc === 137) {
+        return array('kein_zugriff', sprintf(fw_t('EINST.DOCKER_G_HAENGT'), $sekunden));
+    }
+    if (strpos($t, 'permission denied') !== false) {
+        return array('kein_zugriff', fw_t('EINST.DOCKER_G_GRUPPE'));
+    }
+    if (strpos($t, 'cannot connect') !== false || strpos($t, 'daemon running') !== false) {
+        return array('kein_zugriff', fw_t('EINST.DOCKER_G_DIENST'));
+    }
+    return array('kein_zugriff', sprintf(fw_t('EINST.DOCKER_G_FEHLER'), $rc));
+}
+
+/* ==================================================================
+ * X-7 (Welle 4, Entscheidung 19): Gleichwert-Unterdrueckung
+ *
+ * Gilt nur fuer Sollwert-Befehle. In dieser Linie ist das "wartung" mit
+ * seiner Dauer (ein Modus mit Ablauf); "quittieren" ist ein Taster und
+ * bleibt ungebremst. Derselbe Wert innerhalb von 60 s wird nicht erneut
+ * beauftragt (UNVERAENDERT=1), kein 429. Der Merker wird unter flock
+ * gefuehrt und faellt geschlossen aus ('MERKER' -> 503). Bauart
+ * by_gleichwert_pruefen() (BYD Autos 0.9.22), Vorbild EVCC 0.9.37.
+ * ================================================================== */
+
+define('FW_GLEICHWERT_S', 60);
+
+/**
+ * Rueckgabe array(Urteil, Sekunden): 'UNVERAENDERT' (derselbe Wert ging vor
+ * weniger als 60 s hinaus), 'MERKER' (geschlossen ausfallen) oder '' -
+ * dann ist der Wert jetzt vorgemerkt.
+ */
+function fw_gleichwert_pruefen($schluessel, $wert)
+{
+    $f = fw_paths()['gleichwert'];
+    if ($f === '') { return array('MERKER', 0); }
+    if (!is_dir(dirname($f))) { @mkdir(dirname($f), 0775, true); }
+    $fh = @fopen($f, 'c+');
+    if ($fh === false || !@flock($fh, LOCK_EX)) {
+        if (is_resource($fh)) { fclose($fh); }
+        return array('MERKER', 0);
+    }
+    $m = json_decode((string) stream_get_contents($fh), true);
+    if (!is_array($m)) { $m = array(); }      // unlesbar gilt als leer
+    $jetzt = time();
+    $e = isset($m[$schluessel]) && is_array($m[$schluessel]) ? $m[$schluessel] : null;
+    if ($e !== null && isset($e['w'], $e['t']) && is_scalar($e['w']) && is_scalar($e['t'])) {
+        $seit = $jetzt - (int) $e['t'];
+        if ($seit >= 0 && $seit < FW_GLEICHWERT_S && (string) $e['w'] === (string) $wert) {
+            flock($fh, LOCK_UN);
+            fclose($fh);
+            return array('UNVERAENDERT', $seit);
+        }
+    }
+    $m[$schluessel] = array('w' => (string) $wert, 't' => $jetzt);
+    $json = (string) json_encode($m);
+    $ok = ftruncate($fh, 0) && rewind($fh) && fwrite($fh, $json) === strlen($json) && fflush($fh);
+    flock($fh, LOCK_UN);
+    fclose($fh);
+    return $ok ? array('', 0) : array('MERKER', 0);
+}
+
+/** Den Merker eines Befehls verwerfen (Auftrag gescheitert, Oberflaeche hat geschaltet). */
+function fw_gleichwert_vergessen($schluessel)
+{
+    $f = fw_paths()['gleichwert'];
+    if ($f === '' || !is_file($f)) { return true; }
+    $fh = @fopen($f, 'c+');
+    if ($fh === false || !@flock($fh, LOCK_EX)) {
+        if (is_resource($fh)) { fclose($fh); }
+        return false;
+    }
+    $m = json_decode((string) stream_get_contents($fh), true);
+    if (!is_array($m)) { $m = array(); }
+    unset($m[$schluessel]);
+    $json = (string) json_encode((object) $m);
+    $ok = ftruncate($fh, 0) && rewind($fh) && fwrite($fh, $json) === strlen($json) && fflush($fh);
+    flock($fh, LOCK_UN);
+    fclose($fh);
+    return $ok;
 }
 
 /** Ein Grund aus fw_ganzzahl_pruefen() als Satz einer Beanstandung. */
@@ -1658,7 +1865,7 @@ function fw_einstellung_pruefen($k, $w)
  * sonst traefe das Ersetzen gewoehnliche Woerter).
  * ================================================================== */
 
-function fw_einmal_schreiben($meldungen, $fehler, $misslungen, $test)
+function fw_einmal_schreiben($meldungen, $fehler, $misslungen, $test, $eingaben = null)
 {
     $f = fw_paths()['einmal'];
     if ($f === '') { return false; }
@@ -1676,7 +1883,30 @@ function fw_einmal_schreiben($meldungen, $fehler, $misslungen, $test)
         'meldungen' => array_values(array_map($weg, $meldungen)),
         'fehler' => array_values(array_map($weg, $fehler)),
         'misslungen' => array_values(array_map($weg, $misslungen)),
-        'test' => $weg($test)), 0600);
+        'test' => $weg($test),
+        /* X-2 (Regeln/04, Welle 4): die eingetippten Werte EINES
+         * beanstandeten Formulars - nie ein Kennwort (das Feld wird gar nicht
+         * gesammelt), und auch hier ersetzt $weg Wortzeichen und Kennwort. */
+        'eingaben' => fw_einmal_eingaben_saeubern($eingaben, $weg)), 0600);
+}
+
+/** X-2: nur die erwartete Form, Texte durch $weg, sonst null. */
+function fw_einmal_eingaben_saeubern($e, $weg)
+{
+    if (!is_array($e) || !isset($e['form']) || !is_string($e['form'])) { return null; }
+    $aus = array('form' => $e['form'], 'falsch' => array(), 'werte' => array(), 'haken' => array());
+    foreach (array('falsch') as $k) {
+        foreach (isset($e[$k]) && is_array($e[$k]) ? $e[$k] : array() as $v) {
+            if (is_string($v)) { $aus[$k][] = $v; }
+        }
+    }
+    foreach (isset($e['werte']) && is_array($e['werte']) ? $e['werte'] : array() as $k => $v) {
+        if (is_string($v)) { $aus['werte'][(string) $k] = $weg($v); }
+    }
+    foreach (isset($e['haken']) && is_array($e['haken']) ? $e['haken'] : array() as $k => $v) {
+        $aus['haken'][(string) $k] = $v ? 1 : 0;
+    }
+    return $aus;
 }
 
 function fw_einmal_lesen()
@@ -1691,7 +1921,9 @@ function fw_einmal_lesen()
     };
     return array('meldungen' => $liste('meldungen'), 'fehler' => $liste('fehler'),
                  'misslungen' => $liste('misslungen'),
-                 'test' => isset($d['test']) ? (string) $d['test'] : '');
+                 'test' => isset($d['test']) ? (string) $d['test'] : '',
+                 'eingaben' => fw_einmal_eingaben_saeubern(isset($d['eingaben']) ? $d['eingaben'] : null,
+                                                           'strval'));
 }
 
 /* ==================================================================
@@ -1729,11 +1961,66 @@ function fw_altpraefix_merken($praefix)
 function fw_sicherung_bauen()
 {
     $cfg = fw_config();
+    /* X-3 (Welle 4): besteht die eigene Sicherung das eigene Zurueckspielen?
+     * Geliefert wird sie trotzdem; _warnung nennt nur Schluesselnamen, nie
+     * Werte. Das Zurueckspielen ueberliest Schluessel mit _. */
+    list(, $fw_namen) = fw_sicherung_pruefen($cfg);
     $cfg['_erzeugt'] = date('c');
     $cfg['_fassung'] = 'Funkwacht';
+    if ($fw_namen) {
+        $cfg['_warnung'] = 'Diese Sicherung liesse sich so nicht zurueckspielen. Betroffen: '
+                         . implode(', ', $fw_namen);
+    }
     return array('funkwacht_' . date('Ymd_His') . '.json',
                  json_encode($cfg, JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE
                                    | JSON_UNESCAPED_SLASHES));
+}
+
+/**
+ * X-3 (Welle 4): die Pruefung des Zurueckspielens als eigene Funktion -
+ * dieselbe Stelle fuer das Zurueckspielen, die Warnung beim Sichern und den
+ * _warnung-Kopf. $d ist die gelesene Datei bzw. die Konfiguration.
+ * Rueckgabe: array(Beanstandungen, betroffene Schluesselnamen).
+ */
+function fw_sicherung_pruefen($d)
+{
+    $vorgaben = fw_vorgaben();
+    $mangel = array();
+    $namen = array();
+    foreach ($d as $k => $w) {
+        $k = (string) $k;
+        if ($k !== '' && $k[0] === '_') { continue; }      // lesbarer Kopf
+        if (!array_key_exists($k, $vorgaben)) {
+            $mangel[] = sprintf(fw_t('SICH.FREMD'), sprintf(fw_t('SICH.SCHLUESSEL'), $k));
+            $namen[] = $k;
+            continue;
+        }
+        $m = fw_einstellung_pruefen($k, $w);
+        if ($m) {
+            $mangel = array_merge($mangel, $m);
+            $namen[] = $k;
+        }
+    }
+    $fehlt = array();
+    foreach (array_keys($vorgaben) as $k) {
+        if (!array_key_exists($k, $d)) { $fehlt[] = $k; }
+    }
+    if ($fehlt) {
+        $mangel[] = sprintf(fw_t('SICH.FEHLT'), implode(', ', $fehlt));
+        $namen = array_merge($namen, $fehlt);
+    }
+    if (!$mangel && !empty($d['signal_ein']) && $d['signal_url'] === '') {
+        $mangel[] = fw_t('FEHLER.SIGNAL_LEER');
+        $namen[] = 'signal_url';
+    }
+    return array($mangel, array_values(array_unique($namen)));
+}
+
+/** X-3: die Beanstandungen, die das Zurueckspielen der eigenen Sicherung haette. */
+function fw_sicherung_selbstpruefung()
+{
+    list($m, ) = fw_sicherung_pruefen(fw_config());
+    return $m;
 }
 
 /**
@@ -1762,26 +2049,7 @@ function fw_sicherung_lesen($roh)
         return array(0, fw_t('SICH.KEIN_FUNKWACHT'), array());
     }
     $vorgaben = fw_vorgaben();
-    $mangel = array();
-    foreach ($d as $k => $w) {
-        $k = (string) $k;
-        if ($k !== '' && $k[0] === '_') { continue; }      // lesbarer Kopf
-        if (!array_key_exists($k, $vorgaben)) {
-            $mangel[] = sprintf(fw_t('SICH.FREMD'), sprintf(fw_t('SICH.SCHLUESSEL'), $k));
-            continue;
-        }
-        $mangel = array_merge($mangel, fw_einstellung_pruefen($k, $w));
-    }
-    $fehlt = array();
-    foreach (array_keys($vorgaben) as $k) {
-        if (!array_key_exists($k, $d)) { $fehlt[] = $k; }
-    }
-    if ($fehlt) {
-        $mangel[] = sprintf(fw_t('SICH.FEHLT'), implode(', ', $fehlt));
-    }
-    if (!$mangel && !empty($d['signal_ein']) && $d['signal_url'] === '') {
-        $mangel[] = fw_t('FEHLER.SIGNAL_LEER');
-    }
+    list($mangel, ) = fw_sicherung_pruefen($d);
     if ($mangel) {
         return array(0, fw_t('SICH.ABGEWIESEN'), $mangel);
     }

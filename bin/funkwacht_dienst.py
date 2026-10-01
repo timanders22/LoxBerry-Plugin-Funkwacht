@@ -719,12 +719,18 @@ def kennung_abweichung(g, pfad) -> str:
     D1 (Pruefung 29.09.2026): bis 1.0.8 sah der Waechter die fremde Kennung
     (Bemerkung "an diesem Anschluss steckt 0658:0200 statt 1a86:55d4") und
     setzte den Anschluss trotzdem per unbind/bind zurueck. Geprueft wird
-    unmittelbar vor Stufe 2 und Stufe 3, wenn eine Kennung eingetragen ist.
+    unmittelbar vor Stufe 2 und Stufe 3. Seit Welle 4 (a3, Entscheidung 16)
+    ist die Kennung dafuer Pflicht: ohne sie wird abgelehnt.
     Steckt dort gar nichts, trifft der Eingriff kein fremdes Geraet.
     """
     soll = str(g.get("kennung") or "").strip().lower()
     if not soll:
-        return ""
+        # a3 (Entscheidung 16, Welle 4): bis 1.0.9 hiess "keine Kennung"
+        # "frei", und ein umgestecktes fremdes Geraet wurde zurueckgesetzt.
+        # Die Oberflaeche verlangt die Kennung jetzt beim Speichern; eine
+        # aeltere Konfiguration ohne sie wird hier abgelehnt, nicht geheilt.
+        return ("an %s ist keine erwartete Kennung eingetragen - fuer Stufe 2 "
+                "und 3 Pflicht (Feld Kennung; Reiter Test, USB-Geraete auflisten)" % pfad)
     ist, lage = kennung_am_anschluss(pfad)
     if lage == "fehlt":
         return ""
