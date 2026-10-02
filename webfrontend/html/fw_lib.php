@@ -1270,6 +1270,84 @@ function fw_vorlage_vo()
 }
 
 /**
+ * Die Baustein-Liste fuer den Reiter "Einbindung in Loxone" (Nachzug G2,
+ * 02.10.2026; bis 1.0.10 fertiges HTML in der Sprachdatei).
+ *
+ * Nummern und Verweise werden GERECHNET, nie getippt: kommt eine Zeile dazu,
+ * verschoebe sich sonst jeder Verweis lautlos. Die Namen der Eingaenge kommen
+ * aus derselben Quelle wie die Importvorlage (fw_vorlage()): Summenfelder als
+ * 'FW_' . Feld, Felder je Stick ueber fw_titel() des ERSTEN eingetragenen
+ * Sticks. Regel A4 (Regeln/04): ein ODER belegt hoechstens zwei Eingaenge,
+ * jede Zeile verweist nur auf kleinere Nummern.
+ *
+ * Rueckgabe: 'zeilen' (Nummer, Typ, Name, Parameter, Eingaenge - fertiges
+ * HTML: Texte aus der Sprachdatei, Titel maskiert), 'hinweise' (Verweis,
+ * Satz), 'je_stick' (Satz).
+ */
+function fw_bausteinliste()
+{
+    $sum = fw_summenfelder();
+    $gf = fw_felder();
+    $geraete = fw_geraete();
+    $erster = $geraete ? reset($geraete) : null;
+    $mono = function ($titel) { return "<span class='sm-mono'>" . fw_e($titel) . '</span>'; };
+    $s = function ($feld) use ($sum, $mono) {
+        return $mono(isset($sum[$feld]) ? 'FW_' . $feld : '?' . $feld);
+    };
+    $g = function ($feld) use ($gf, $erster, $mono) {
+        if (!isset($gf[$feld])) { return $mono('?' . $feld); }
+        return $mono($erster ? fw_titel($erster, (int) $erster['nr'], $feld) : 'FW_NAME_' . $feld);
+    };
+    $z = array();
+    $nr = array();
+    $neu = function ($k, $typ, $name, $param, $eing) use (&$z, &$nr) {
+        $nr[$k] = count($z) + 1;
+        $z[] = array($nr[$k], $typ, $name, $param, $eing);
+    };
+    $r = function ($k) use (&$nr) { return '#' . $nr[$k]; };
+    $opt = function ($typ) { return sprintf(fw_t('LOX.BS_OPTIONAL'), fw_t($typ)); };
+
+    $neu('zustand', fw_t('LOX.BS_T_STATUS'), fw_t('LOX.BS_N_ZUSTAND'), fw_t('LOX.BS_P_KEINE'), $s('OK'));
+    $neu('krank', fw_t('LOX.BS_T_AWV'), fw_t('LOX.BS_N_KRANK'), fw_t('LOX.BS_P_KRANK'), $s('KRANK'));
+    $neu('alarm', fw_t('LOX.BS_T_STATUS'), fw_t('LOX.BS_N_ALARM'), fw_t('LOX.BS_P_KEINE'), $s('ALARM'));
+    $neu('tot', fw_t('LOX.BS_T_AWV'), fw_t('LOX.BS_N_TOT'), fw_t('LOX.BS_P_TOT'), $s('ALTER'));
+    $neu('oder1', fw_t('LOX.BS_T_ODER'), fw_t('LOX.BS_N_ODER1'), fw_t('LOX.BS_P_KEINE'),
+         sprintf(fw_t('LOX.BS_E_ZWEI'), $r('krank'), $r('alarm')));
+    $neu('sammel', fw_t('LOX.BS_T_ODER'), fw_t('LOX.BS_N_SAMMEL'), fw_t('LOX.BS_P_KEINE'),
+         sprintf(fw_t('LOX.BS_E_ZWEI'), $r('oder1'), $r('tot')));
+    $neu('meldung', fw_t('LOX.BS_T_BENACHR'), fw_t('LOX.BS_N_MELDUNG'), fw_t('LOX.BS_P_MELDUNG'),
+         sprintf(fw_t('LOX.BS_E_NUR'), $r('sammel')));
+    $neu('gesund', fw_t('LOX.BS_T_MERKER'), fw_t('LOX.BS_N_GESUND'), fw_t('LOX.BS_P_GESUND'), $g('OK'));
+    $neu('verschleiss', fw_t('LOX.BS_T_AWV'), fw_t('LOX.BS_N_VERSCHLEISS'), fw_t('LOX.BS_P_VERSCHLEISS'),
+         $g('HEIL7T'));
+    $neu('heilung', fw_t('LOX.BS_T_AWV'), fw_t('LOX.BS_N_HEILUNG'), fw_t('LOX.BS_P_HEILUNG'),
+         sprintf(fw_t('LOX.BS_E_FORMEL'), $s('VERSUCHE'), $s('GEHEILT')));
+    $neu('flattert', fw_t('LOX.BS_T_AWV'), fw_t('LOX.BS_N_FLATTERT'), fw_t('LOX.BS_P_FLATTERT'), $g('NEUSTARTS'));
+    $neu('warum', $opt('LOX.BS_T_STATUS'), fw_t('LOX.BS_N_WARUM'), fw_t('LOX.BS_P_WARUM'), $g('WARUMNR'));
+    $neu('gesperrt', $opt('LOX.BS_T_MERKER'), fw_t('LOX.BS_N_GESPERRT'), fw_t('LOX.BS_P_KEINE'), $s('GESPERRT'));
+    $neu('statistik', fw_t('LOX.BS_T_STATISTIK'), fw_t('LOX.BS_N_STATISTIK'), fw_t('LOX.BS_P_STATISTIK'),
+         $s('GEHEILT'));
+    $neu('quitt', $opt('LOX.BS_T_VA'), fw_t('LOX.BS_N_QUITT'), fw_t('LOX.BS_P_QUITT'), fw_t('LOX.BS_E_TASTER'));
+
+    $und = function ($a, $b) { return sprintf(fw_t('LOX.BS_UND'), $a, $b); };
+    $hinweise = array(
+        array($und($r('krank'), $r('tot')), fw_t('LOX.BS_H_EVZ')),
+        array($r('alarm'), fw_t('LOX.BS_H_ALARM')),
+        array($und($r('oder1'), $r('sammel')), sprintf(fw_t('LOX.BS_H_ODER'), $r('sammel'))),
+        array($r('meldung'), fw_t('LOX.BS_H_BENACHR')),
+        array($r('verschleiss'), fw_t('LOX.BS_H_VERSCHLEISS')),
+        array($r('heilung'), fw_t('LOX.BS_H_HEILUNG')),
+        array($r('flattert'), fw_t('LOX.BS_H_FLATTERT')),
+        array($r('gesperrt'), fw_t('LOX.BS_H_GESPERRT')),
+    );
+    $je = array($r('gesund'), $r('verschleiss'), $r('flattert'));
+    $stick = $erster ? sprintf(fw_t('LOX.BS_STICK_ERSTER'), fw_e($erster['name']))
+                     : fw_t('LOX.BS_STICK_KEINER');
+    $je_stick = sprintf(fw_t('LOX.BS_JE_STICK'), $und(implode(', ', $je), $r('warum')), $stick);
+    return array('zeilen' => $z, 'hinweise' => $hinweise, 'je_stick' => $je_stick);
+}
+
+/**
  * Die Statuszeile fuer den Miniserver.
  *
  * Sie rechnet NICHTS selbst nach, sondern gibt die Werteliste aus, die der

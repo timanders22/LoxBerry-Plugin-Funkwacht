@@ -1446,8 +1446,24 @@ if ($fw_sich_mangel) { ?>
 <div class="sm-step"><?= fw_t('LOX.AUSFALL_TEXT') ?></div>
 
 <h3><?= fw_e(fw_t('LOX.H_BAUSTEINE')) ?></h3>
-<div class="sm-breit"><?= fw_t('LOX.BAUSTEINE') ?></div>
-<div class="sm-hilfe"><?= fw_t('LOX.BAUSTEINE_ERL') ?></div>
+<?php /* Nachzug G2: die Liste kommt aus fw_bausteinliste() (Nummern gerechnet,
+   Titel aus der Vorlagenquelle), nicht mehr als fertiges HTML aus der .ini.
+   Typ, Name, Parameter und Saetze stammen aus der Sprachdatei und duerfen
+   ihre Auszeichnung behalten; Titel sind dort schon maskiert. */
+$fw_bl = fw_bausteinliste(); ?>
+<div class="sm-breit"><table class="sm-tbl">
+<tr><th><?= fw_e(fw_t('LOX.BS_SP_NR')) ?></th><th><?= fw_e(fw_t('LOX.BS_SP_TYP')) ?></th>
+    <th><?= fw_e(fw_t('LOX.BS_SP_NAME')) ?></th><th><?= fw_e(fw_t('LOX.BS_SP_PARAM')) ?></th>
+    <th><?= fw_e(fw_t('LOX.BS_SP_EING')) ?></th></tr>
+<?php foreach ($fw_bl['zeilen'] as $fw_bz) { ?>
+<tr><td><?= (int) $fw_bz[0] ?></td><td><?= $fw_bz[1] ?></td><td><?= $fw_bz[2] ?></td>
+    <td><?= $fw_bz[3] ?></td><td><?= $fw_bz[4] ?></td></tr>
+<?php } ?>
+</table></div>
+<p class="sm-hilfe"><?= $fw_bl['je_stick'] ?></p>
+<div class="sm-hilfe"><?php foreach ($fw_bl['hinweise'] as $fw_bh) {
+    echo '<b>' . sprintf(fw_e(fw_t('LOX.BS_ZU')), $fw_bh[0]) . '</b> ' . $fw_bh[1] . ' ';
+} ?><?= fw_t('LOX.BS_H_ZEIT') ?></div>
 
 <h3><?= fw_e(fw_t('LOX.H_GEGENPROBE')) ?></h3>
 <div class="sm-step"><?= fw_t('LOX.GEGENPROBE_TEXT') ?></div>

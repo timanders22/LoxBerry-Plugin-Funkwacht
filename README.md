@@ -4,10 +4,24 @@
 Merkt, wenn ein Stick verstummt, weckt ihn in Stufen wieder auf — und misst
 nach, ob es geholfen hat.
 
-Version 1.0.9 · LoxBerry ab 3.0 · PHP 7.4 und 8.x · Python 3 mit paho-mqtt
+Version 1.0.10 · LoxBerry ab 3.0 · PHP 7.4 und 8.x · Python 3 mit paho-mqtt
 (Debian-Paket, über `dpkg/apt`)
 
 ---
+
+## Neu in 1.0.10
+
+Baustein-Liste nach A4 mit echten Eingangsnamen (Nachzug B: X-8, A4).
+Gemessen am Prüfstand unter PHP 7.4 und 8.5
+(Windows, `php -S`, ohne Stick und mit zwei Sticks, deutsch und englisch); nicht am Gerät.
+
+* **Baustein-Liste im Reiter „Einbindung in Loxone“ neu aufgebaut:** Die Sammelstörung lief bisher über ein ODER
+  mit drei Eingängen (#5). Jetzt sind es zwei ODER mit je zwei Eingängen (#5 „Stick gestört oder Alarm“, #6
+  „Sammelstörung Funkwacht“); die folgenden Zeilen rücken um eins (Benachrichtigung jetzt #7).
+* **Die Eingänge je Stick tragen ihre echten Namen:** Bisher stand dort `G<n>OK`, `G<n>HEIL7T` usw. – das ist der
+  Feldname in der Antwortzeile, nicht der Name des virtuellen Eingangs. Jetzt nennt die Liste den Titel aus der
+  Importvorlage, z. B. `FW_ZIGBEESTICK_OK` für den ersten eingetragenen Stick; ohne Stick steht `FW_NAME_OK`.
+* **In Loxone:** nichts zu tun – ein schon gebautes ODER mit drei Eingängen wirkt gleich.
 
 ## Neu in 1.0.9
 
