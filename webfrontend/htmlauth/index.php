@@ -998,6 +998,7 @@ if ($fw_rahmen) {
 
 <!-- ================= Reiter: Einstellungen ================= -->
 <div class="sm-seite<?= $fw_tab === 'tab-settings' ? ' sm-active' : '' ?>" id="tab-settings">
+<div class="sm-hinweis"><?= fw_t('EINST.WAS_IST_DAS') ?></div>
 
 <h2><?= fw_e(fw_t('EINST.H_LAGE')) ?></h2>
 <div class="sm-step"><?= fw_t('EINST.LAGE_ERKLAERUNG') ?></div>
