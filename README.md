@@ -4,10 +4,30 @@
 Merkt, wenn ein Stick verstummt, weckt ihn in Stufen wieder auf — und misst
 nach, ob es geholfen hat.
 
-Version 1.0.10 · LoxBerry ab 3.0 · PHP 7.4 und 8.x · Python 3 mit paho-mqtt
+Version 1.0.11 · LoxBerry ab 3.0 · PHP 7.4 und 8.x · Python 3 mit paho-mqtt
 (Debian-Paket, über `dpkg/apt`)
 
 ---
+
+## Neu in 1.0.11
+
+Ansage bei Störung über die gemeinsame Sprachausgabe (ab Werk aus).
+
+* **Wann:** Wechselt der Befund eines Sticks auf gestört oder zurück auf in Ordnung, sagt die Funkwacht
+  das an – dieselbe Stelle, an der sie heute die LoxBerry-Meldung und SignalBot auslöst. Beide Anlässe
+  sind einzeln abwählbar; höchstens einmal je Anlass und Stick in 30 Minuten, nie Werte im Takt.
+* **Ausgabe:** Loxone Music Server, MusicServer4Home, eigene Adressvorlage, Alexa-NG oder
+  Google-Lautsprecher über Chromecast 4 Lox NG. Adresse und Vorlage müssen im Heimnetz liegen; die
+  Sprechtoken stehen in keiner Sicherung, keiner Seite und keinem Protokoll.
+* **Wie:** Der Wächter (Python) ruft dafür `bin/fw_ansage.php` auf und übergibt den Auftrag auf der
+  Standardeingabe; gesprochen wird über die gemeinsame Sprachausgabe in PHP. LoxBerry-Meldung, SignalBot,
+  MQTT und Endpunkt laufen unverändert weiter. In Loxone ist dafür nichts anzulegen.
+* Einstellungen im Reiter Einstellungen (Abschnitt Melden), Testansage und Prüfzeile im Reiter Test.
+* **Zigbee2MqttNG:** neue Vorlage „Zigbee2MqttNG über MQTT (nur melden)“ (Dienst `zigbee2mqttng`, Thema
+  `zigbee2mqtt/bridge/health` wie bisher). Nennt ein Eintrag einen Dienst, den das System nicht kennt (etwa
+  `zigbee2mqtt` nach dem Umstieg), steht in der Lage „Dienst … nicht vorhanden – Zigbee2MqttNG?“, und es wird
+  nicht geheilt (`warumnr` 10). Die Importvorlage erlaubt dafür jetzt bis 10; wer die Zahl in Loxone
+  auswertet, liest die Vorlage neu ein (eine ältere kappt bei 9).
 
 ## Neu in 1.0.10
 

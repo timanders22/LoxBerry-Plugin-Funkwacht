@@ -606,6 +606,28 @@ def dienst_lage(einheit):
     return None, neustarts, zustand or "unbekannt"
 
 
+def dienst_fehlt_hinweis(g) -> str:
+    """Kennt systemd den eingetragenen Dienst? '' = ja oder nicht feststellbar, sonst der Hinweis.
+
+    Koordinator 08.10.2026 (z2mng_hausstandard F-1): Nach dem Umstieg auf Zigbee2MqttNG ist der Dienst
+    zigbee2mqtt entfernt; ein Eintrag, der ihn noch nennt, soll das klar sagen, statt ihn zu heilen.
+    Nur LoadState=not-found zaehlt - antwortet systemctl nicht, ist das keine Aussage.
+    """
+    e = str(g.get("dienst") or "").strip()
+    if not e or g.get("container") or not re.match(r"^[A-Za-z0-9@:._\-]+$", e):
+        return ""
+    einheit, grund = fw_pruef.einheit_pruefen(e)
+    if grund:
+        return ""
+    rc, aus = befehl(["systemctl", "show", "-p", "LoadState", einheit], 10)
+    if rc != 0 or "LoadState=not-found" not in aus:
+        return ""
+    if e in ("zigbee2mqtt", "zigbee2mqtt.service"):
+        return ("Dienst %s nicht vorhanden - Zigbee2MqttNG? (Dienst zigbee2mqttng, Vorlage "
+                "\"Zigbee2MqttNG ueber MQTT\"); es wird nicht geheilt" % e)
+    return "Dienst %s nicht vorhanden; es wird nicht geheilt" % e
+
+
 def docker_lage(name):
     """Docker: laeuft der Container, was sagt sein Healthcheck?
 
@@ -1770,10 +1792,13 @@ def durchlauf(cfg, hist, tabu, jetzt=None):
         if groesse is not None:
             he["letzte_groesse"] = groesse
 
+        fehlt = dienst_fehlt_hinweis(g)
+        if fehlt:
+            bemerkung = " / ".join(x for x in (bemerkung, fehlt) if x)
         entschluss = fw_pruef.entscheiden(
             g, alter, verlauf, bisher, jetzt, schonzeit=schonzeit, sperre=sperre,
             statistik=statistik_lesen(he),
-            letzter_versuch=float(he.get("erholung_ab") or 0) or None)
+            letzter_versuch=float(he.get("erholung_ab") or 0) or None, dienst_fehlt=bool(fehlt))
         entschluesse.append(entschluss)
 
         # --- Erfolgskontrolle der letzten Heilung ---------------------
@@ -1897,6 +1922,28 @@ def melden(cfg, meldungen):
     if gut:
         text = "Wieder in Ordnung: " + ", ".join(m[1] for m in gut)
         benachrichtigen(cfg, 6, text)
+    ansagen(meldungen)
+
+
+def ansagen(meldungen):
+    """Nr. 36 b (Stufe 2, seit 1.0.11): die Ansage ueber die gemeinsame Sprachausgabe.
+
+    Je Stick, dessen Befund wechselt, ein Aufruf von bin/fw_ansage.php - der Auftrag auf der
+    Standardeingabe, nie auf der Kommandozeile. Ob gesprochen wird (Ausgabeart, Anlass,
+    Wiederholsperre), entscheidet die PHP-Seite; sie schreibt auch das Ergebnis ins Protokoll. Hier
+    steht nur der Aufruf: ab Werk ist die Ausgabeart 'aus', die Bruecke antwortet dann mit 3. Scheitert
+    der Aufruf selbst, steht das einmal im Protokoll - LoxBerry-Meldung, SignalBot, MQTT und Endpunkt
+    laufen davon unabhaengig.
+    """
+    helfer = os.path.join(os.path.dirname(os.path.abspath(__file__)), "fw_ansage.php")
+    if not os.path.isfile(helfer):
+        return
+    for nr, name, ok, _grund in meldungen:
+        auftrag = json.dumps({"anlass": "wieder" if ok else "gestoert", "nr": int(nr), "name": name})
+        rc, aus = befehl(["php", helfer], 30, auftrag)
+        if rc not in (0, 1, 3):
+            log("Ansage: Aufruf von fw_ansage.php gescheitert (rc %d: %s)" % (rc, aus.strip()[:160]),
+                "ansage_aufruf")
 
 
 def veroeffentlichen(cfg, stand):
@@ -1965,10 +2012,14 @@ def trockenlauf(cfg, hist, tabu):
         verlauf = [float(t) for t in he.get("verlauf", [])][-50:]
         bisher = int(hist["stufen"].get(str(nr), 0))
         alter, _, neustarts, bem, a1, a2 = messen(g, he.get("letzte_groesse"))
+        fehlt = dienst_fehlt_hinweis(g)
+        if fehlt:
+            bem = " / ".join(x for x in (bem, fehlt) if x)
         e = fw_pruef.entscheiden(g, alter, verlauf, bisher, jetzt,
                                  schonzeit=schonzeit, sperre=sperre,
                                  statistik=statistik_lesen(he),
-                                 letzter_versuch=float(he.get("erholung_ab") or 0) or None)
+                                 letzter_versuch=float(he.get("erholung_ab") or 0) or None,
+                                 dienst_fehlt=bool(fehlt))
         z.append("Stick %d: %s   (%s%s)" % (
             nr, g["name"], g["art"], "+" + g["art2"] if g["art2"] else ""))
         z.append("   gemessenes Alter : %s" % ("noch nie gehoert" if alter is None

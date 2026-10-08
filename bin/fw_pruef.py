@@ -75,7 +75,7 @@ GRUND_NR = {"frisch": 0, "veraltet": 1, "nie_gesehen": 2, "zeitsprung": 3,
             "aus": 4, "erholung": 5}
 WARUM_NR = {"": 0, "frei": 0, "heilen_aus": 1, "abstand": 2, "tagesgrenze": 3,
             "keine_stufe_mehr": 4, "nie_gesehen": 5, "anlaufzeit": 6,
-            "nachtruhe": 7, "wartung": 8, "global_aus": 9}
+            "nachtruhe": 7, "wartung": 8, "global_aus": 9, "dienst_fehlt": 10}
 
 # Sperren, die von aussen kommen (der Dienst rechnet sie aus, weil dafuer eine
 # Uhr und /proc/uptime noetig sind).
@@ -422,7 +422,7 @@ def darf_heilen(g: dict, verlauf: list, jetzt: float) -> tuple:
 
 def entscheiden(g: dict, alter_s, verlauf: list, bisher: int, jetzt: float,
                 schonzeit: bool = False, sperre: str = "",
-                statistik=None, letzter_versuch=None) -> dict:
+                statistik=None, letzter_versuch=None, dienst_fehlt: bool = False) -> dict:
     """Der ganze Entschluss in einem Aufruf.
 
     schonzeit  kurz nach dem Systemstart ist jede Datei alt und jedes Thema
@@ -459,6 +459,12 @@ def entscheiden(g: dict, alter_s, verlauf: list, bisher: int, jetzt: float,
     # schlimmer als keiner.
     if grund == "nie_gesehen":
         return dict(krank, warum="nie_gesehen")
+
+    # Koordinator 08.10.2026: der eingetragene Dienst ist dem System unbekannt (etwa zigbee2mqtt nach
+    # dem Umstieg auf Zigbee2MqttNG). Gemeldet wird, geheilt nicht - ein Neustart traefe nichts oder
+    # einen Dienst, den niemand mehr will.
+    if dienst_fehlt:
+        return dict(krank, warum="dienst_fehlt")
 
     if schonzeit:
         return dict(krank, warum="anlaufzeit")
@@ -780,6 +786,10 @@ def selbsttest() -> tuple:
     pr("jede Sperre hat eine Nummer",
        all(s in WARUM_NR for s in SPERREN if s), True)
     pr("leer und frei bedeuten dasselbe", WARUM_NR[""], WARUM_NR["frei"])
+    pr("fehlender Dienst: melden, nicht heilen",
+       entscheiden(dict(g, heilen=1), 900, [], 0, jetzt, dienst_fehlt=True)["warum"], "dienst_fehlt")
+    pr("fehlender Dienst aendert nichts an einem gesunden Stick",
+       entscheiden(dict(g, heilen=1), 10, [], 0, jetzt, dienst_fehlt=True)["ok"], 1)
 
     # ---------- Systemgeraete ----------
     sys_pfade = ["1-1.1", "2-2"]

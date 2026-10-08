@@ -482,6 +482,10 @@ function fw_test_selbstpruefung()
     list($m_ok, $m_txt) = fw_probe_marke();
     $o[] = fw_pruefzeile(fw_klartext('TEST.P_F_MARKE'), $m_ok, $m_txt);
 
+    /* Nr. 36 b: die Ansage (Ausgabeart, Erreichbarkeit, letzte Ansage). */
+    list($a_ok, $a_txt) = fw_pruefe_ansage();
+    $o[] = fw_pruefzeile(fw_klartext('DURCHSAGE.PRUEF'), $a_ok, $a_txt);
+
     list($t_ok, $t_txt) = fw_probe_themen();
     $o[] = fw_pruefzeile(fw_klartext('TEST.P_F_THEMEN'), $t_ok, $t_txt);
 

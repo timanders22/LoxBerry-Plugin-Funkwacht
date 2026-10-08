@@ -52,6 +52,9 @@ if (!function_exists('lb_wurzel_ermitteln')) {
 if (!function_exists('fw_e')) {
     function fw_e($s) { return htmlspecialchars((string) $s, ENT_QUOTES, 'UTF-8'); }
 }
+/* Gemeinsame Sprachausgabe (Abschrift von Werkzeuge/gemeinsam/sprachausgabe.php, Nr. 36 b). Liegt
+ * neben dieser Datei; die Datei schuetzt sich selbst gegen doppeltes Laden. */
+require_once __DIR__ . '/sprachausgabe.php';
 function fw_x($s) { return htmlspecialchars((string) $s, ENT_QUOTES | ENT_XML1, 'UTF-8'); }
 
 /* Wie viele Zeilen die Oberflaeche hoechstens fuehrt. Die WIRKLICHE Zahl
@@ -200,6 +203,11 @@ function fw_vorgaben()
         'broker_user'  => '',
         'broker_pass'  => '',
         'broker_id'    => '',
+        /* Nr. 36 b (Stufe 2): Ansage ueber die gemeinsame Sprachausgabe - ab Werk keine Ausgabeart
+         * ('aus'); die Anlaesse sind an, wirken aber erst mit einer Ausgabeart. */
+        'ansage_gestoert' => 1,
+        'ansage_wieder'   => 1,
+        'tts'          => ansage_vorgaben('aus'),
     );
 }
 
@@ -236,7 +244,7 @@ function fw_warum_nr()
     return array('' => 0, 'frei' => 0, 'heilen_aus' => 1, 'abstand' => 2,
                  'tagesgrenze' => 3, 'keine_stufe_mehr' => 4, 'nie_gesehen' => 5,
                  'anlaufzeit' => 6, 'nachtruhe' => 7, 'wartung' => 8,
-                 'global_aus' => 9);
+                 'global_aus' => 9, 'dienst_fehlt' => 10);
 }
 
 /**
@@ -273,6 +281,16 @@ function fw_vorlagen()
             'werte' => array('art' => 'mqtt', 'thema' => 'zigbee2mqtt/bridge/health',
                              'art2' => '', 'pfad2' => '', 'verkn' => 'oder',
                              'dienst' => 'zigbee2mqtt', 'heilen' => 0,
+                             'hoechstalter' => 1500, 'hoechststufe' => 2),
+        ),
+        /* Koordinator 08.10.2026 (z2mng_hausstandard F-1): Zigbee2MqttNG laeuft als Dienst zigbee2mqttng
+         * und sendet unter denselben Themen; der alte Dienst zigbee2mqtt ist dort entfernt. Wie z2m_mqtt
+         * zunaechst NUR MELDEN. */
+        'z2mng_mqtt' => array(
+            'text' => 'VORL.Z2MNG_MQTT',
+            'werte' => array('art' => 'mqtt', 'thema' => 'zigbee2mqtt/bridge/health',
+                             'art2' => '', 'pfad2' => '', 'verkn' => 'oder',
+                             'dienst' => 'zigbee2mqttng', 'heilen' => 0,
                              'hoechstalter' => 1500, 'hoechststufe' => 2),
         ),
         'z2m_docker' => array(
@@ -455,7 +473,7 @@ function fw_config($erzeugen = true)
     $cfg['anlauf_s']     = max(0, min(3600, (int) $cfg['anlauf_s']));
     $cfg['log_kb']       = max(16, min(20000, (int) $cfg['log_kb']));
     $cfg['verlauf_tage'] = max(1, min(730, (int) $cfg['verlauf_tage']));
-    foreach (array('mqtt_ein', 'global_aus', 'melden_aktiv', 'signal_ein') as $k) {
+    foreach (array('mqtt_ein', 'global_aus', 'melden_aktiv', 'signal_ein', 'ansage_gestoert', 'ansage_wieder') as $k) {
         $cfg[$k] = empty($cfg[$k]) ? 0 : 1;
     }
     foreach (array('ruhe_von', 'ruhe_bis') as $k) {
@@ -1135,7 +1153,7 @@ function fw_felder()
         'LETZTE'    => array('',  0,  4102444800, 'FW_FELD.LETZTE'),
         'NEUSTARTS' => array('',  -1, 99999,      'FW_FELD.NEUSTARTS'),
         'GRUNDNR'   => array('',  0,  9,          'FW_FELD.GRUNDNR'),
-        'WARUMNR'   => array('',  0,  9,          'FW_FELD.WARUMNR'),
+        'WARUMNR'   => array('',  0,  10,         'FW_FELD.WARUMNR'),
     );
 }
 
@@ -1878,6 +1896,14 @@ function fw_geraet_zeile_pruefen($roh, $nr)
 function fw_einstellung_pruefen($k, $w)
 {
     $wo = sprintf(fw_t('SICH.SCHLUESSEL'), $k);
+    /* Nr. 36 b: der Block tts mit den Regeln des Moduls (Ausgabeart, Adresse im Heimnetz, Vorlage). Ein
+     * Sprechtoken in einer Sicherungsdatei weist fw_sicherung_lesen() vorher ab. */
+    if ($k === 'tts') {
+        $fw_tg = '';
+        if (is_array($w) && ansage_wert_pruefen($w, $fw_tg, fw_ansage_modi()) !== null) { return array(); }
+        return array(sprintf(fw_t('DURCHSAGE.SICH_WERT'),
+                             is_array($w) ? ansage_kennung_text($fw_tg, fw_ansage_k()) : 'tts'));
+    }
     $zahlen = fw_betrieb_zahlen();
     if ($k === 'geraete') {
         /* Eine LISTE von Zeilen, keine Zuordnung mit Schluesseln: aus
@@ -1900,7 +1926,7 @@ function fw_einstellung_pruefen($k, $w)
         list(, $grund) = fw_ganzzahl_pruefen($w, $von, $bis);
         return $grund === '' ? array() : array(fw_sich_zahlgrund($wo, $grund, $von, $bis));
     }
-    if (in_array($k, array('mqtt_ein', 'global_aus', 'melden_aktiv', 'signal_ein'), true)) {
+    if (in_array($k, array('mqtt_ein', 'global_aus', 'melden_aktiv', 'signal_ein', 'ansage_gestoert', 'ansage_wieder'), true)) {
         return in_array($w, array(0, 1, true, false), true)
             ? array() : array(sprintf(fw_t('SICH.W_HAKEN'), $wo));
     }
@@ -2043,6 +2069,8 @@ function fw_sicherung_bauen()
      * Geliefert wird sie trotzdem; _warnung nennt nur Schluesselnamen, nie
      * Werte. Das Zurueckspielen ueberliest Schluessel mit _. */
     list(, $fw_namen) = fw_sicherung_pruefen($cfg);
+    /* Nr. 36 b: die Sprechtoken der Sprachausgabe gehen nie in eine Sicherung. */
+    if (isset($cfg['tts']) && is_array($cfg['tts'])) { $cfg['tts'] = ansage_sicherung_bereinigen($cfg['tts']); }
     $cfg['_erzeugt'] = date('c');
     $cfg['_fassung'] = 'Funkwacht';
     if ($fw_namen) {
@@ -2081,6 +2109,9 @@ function fw_sicherung_pruefen($d)
     }
     $fehlt = array();
     foreach (array_keys($vorgaben) as $k) {
+        /* Nr. 36 b: eine Sicherung von vor 1.0.11 kennt die Ansage nicht - die geltenden Werte bleiben
+         * (fw_sicherung_lesen() sagt es). */
+        if (!array_key_exists($k, $d) && in_array($k, fw_ansage_schluessel(), true)) { continue; }
         if (!array_key_exists($k, $d)) { $fehlt[] = $k; }
     }
     if ($fehlt) {
@@ -2127,6 +2158,14 @@ function fw_sicherung_lesen($roh)
         return array(0, fw_t('SICH.KEIN_FUNKWACHT'), array());
     }
     $vorgaben = fw_vorgaben();
+    /* Nr. 36 b (Stufe 2): eine Sicherung dieses Plugins traegt nie ein Sprechtoken - traegt die Datei
+     * eines, wird sie abgewiesen; das geltende Token bleibt. */
+    if (array_key_exists('tts', $d)) {
+        $fw_tm = ansage_sicherung_mangel($d['tts']);
+        if ($fw_tm) {
+            return array(0, fw_t('SICH.ABGEWIESEN'), array(sprintf(fw_t('DURCHSAGE.SICH_TOKEN'), implode(', ', $fw_tm))));
+        }
+    }
     list($mangel, ) = fw_sicherung_pruefen($d);
     if ($mangel) {
         return array(0, fw_t('SICH.ABGEWIESEN'), $mangel);
@@ -2134,7 +2173,23 @@ function fw_sicherung_lesen($roh)
     /* Alles geprueft: uebernommen wird genau der Inhalt der Datei, nur in
      * der Schreibweise der Konfiguration (true -> 1, Zahltext -> Zahl). */
     $neu = array();
-    foreach (array_keys($vorgaben) as $k) { $neu[$k] = $d[$k]; }
+    $fw_jetzt = fw_config(false);
+    $fw_behalten = array();
+    foreach (array_keys($vorgaben) as $k) {
+        if (!array_key_exists($k, $d)) {      // nur die Ansage (fw_sicherung_pruefen())
+            $neu[$k] = $fw_jetzt[$k];
+            $fw_behalten[] = $k;
+            continue;
+        }
+        $neu[$k] = $d[$k];
+    }
+    /* Nr. 36 b: der Block tts vervollstaendigt, die geltenden Sprechtoken behalten. */
+    if (!in_array('tts', $fw_behalten, true)) {
+        $fw_tj = fw_tts($fw_jetzt);
+        $fw_tg = '';
+        list($fw_tv) = ansage_vervollstaendigen(ansage_wert_pruefen($d['tts'], $fw_tg, fw_ansage_modi()) + $fw_tj);
+        $neu['tts'] = ansage_sicherung_tokens_behalten($fw_tv, $fw_tj);
+    }
     $anzahl = 0;
     foreach ($neu['geraete'] as $i => $g) {
         $neu['geraete'][$i] = fw_geraet_geradebiegen($g);
@@ -2142,7 +2197,7 @@ function fw_sicherung_lesen($roh)
     }
     foreach (array_keys(fw_betrieb_zahlen()) as $k) { $neu[$k] = (int) $neu[$k]; }
     $neu['zeilen'] = (int) $neu['zeilen'];
-    foreach (array('mqtt_ein', 'global_aus', 'melden_aktiv', 'signal_ein') as $k) {
+    foreach (array('mqtt_ein', 'global_aus', 'melden_aktiv', 'signal_ein', 'ansage_gestoert', 'ansage_wieder') as $k) {
         $neu[$k] = $neu[$k] ? 1 : 0;
     }
     $neu['broker_port'] = (string) $neu['broker_port'];
@@ -2150,7 +2205,148 @@ function fw_sicherung_lesen($roh)
         return array(0, fw_t('FEHLER.SPEICHERN'), array());
     }
     fw_log('Einstellungen aus einer Sicherung zurueckgespielt.');
-    return array(1, sprintf(fw_t('SICH.OK'), $anzahl), array());
+    return array(1, sprintf(fw_t('SICH.OK'), $anzahl)
+                    . ($fw_behalten ? ' ' . sprintf(fw_t('DURCHSAGE.SICH_BEHALTEN'), implode(', ', $fw_behalten)) : ''),
+                 array());
+}
+
+/* ==================================================================
+ * Nr. 36 b (Stufe 2, seit 1.0.11): Ansage ueber die gemeinsame Sprachausgabe
+ * ==================================================================
+ *
+ * Ab Werk aus (Ausgabeart 'aus'). Angesagt wird, wenn der Befund eines Sticks WECHSELT - auf gestoert
+ * (ansage_gestoert) oder zurueck auf in Ordnung (ansage_wieder): dieselbe Stelle, an der der Waechter die
+ * LoxBerry-Meldung und SignalBot ausloest; beide laufen unabhaengig davon weiter. Nie ein Wert im Takt.
+ * Hoechstens eine Ansage je Anlass und Stick in 30 min (Wiederholsperre); eine gesperrte Ansage wird NICHT
+ * nachgeholt. Der Waechter ist in Python geschrieben und ruft bin/fw_ansage.php (ENTWURF, Abschnitt 4);
+ * entschieden, gesprochen und protokolliert wird hier. Ins Protokoll kommt nur das Ergebnis, nie der Text
+ * (Nr. 18).
+ */
+if (!defined('FW_ANSAGE_SPERRE_S')) { define('FW_ANSAGE_SPERRE_S', 1800); }
+
+/** Erlaubte Ausgabearten: alle des Moduls ausser 'audioserver' (kein Antwortweg zu Loxone im Waechter). */
+function fw_ansage_modi()
+{
+    return array('aus', 'musicserver', 'ms4h', 'custom', 'alexang', 'cc4lox');
+}
+
+/** Die Anlaesse: Kennung => Konfigurationsschluessel. */
+function fw_ansage_anlaesse()
+{
+    return array('gestoert' => 'ansage_gestoert', 'wieder' => 'ansage_wieder');
+}
+
+/** Alle Schluessel der Ansage in der Konfiguration (Sicherungen von vor 1.0.11 tragen sie nicht). */
+function fw_ansage_schluessel()
+{
+    return array_merge(array('tts'), array_values(fw_ansage_anlaesse()));
+}
+
+/** Der Block tts, vervollstaendigt (ab Werk 'aus'). */
+function fw_tts($cfg = null)
+{
+    $cfg = is_array($cfg) ? $cfg : fw_config(false);
+    list($t) = ansage_vervollstaendigen(isset($cfg['tts']) && is_array($cfg['tts']) ? $cfg['tts'] : array(), 'aus');
+    return $t;
+}
+
+/** Ist eine Ausgabeart gewaehlt? */
+function fw_ansage_an($cfg = null)
+{
+    $t = fw_tts($cfg);
+    return is_string($t['mode']) && $t['mode'] !== 'aus' && in_array($t['mode'], fw_ansage_modi(), true);
+}
+
+/** Der Kontext des Moduls: Webport, Kopfzeile, Datenordner, Texte. */
+function fw_ansage_k()
+{
+    $p = fw_paths();
+    return array(
+        'port'   => ansage_webport($p['home'] !== '' ? $p['home'] . '/config/system/general.json' : ''),
+        'kopf'   => array('User-Agent: LoxBerry Funkwacht'),
+        'ordner' => ($p['datadir'] !== '' && @is_dir($p['datadir'])) ? $p['datadir'] : '',
+        't'      => function ($s) { return fw_t($s); },
+        /* Zu dieser Kennung hat das Modul (1.0.2) keinen Satz; linieneigen, bis der Modulschluessel
+         * mit Stufe 2 kommt (Entwurf, Stufe 2). */
+        'schluessel' => array('K_TTS_EINTRAG' => 'DURCHSAGE.SICH_EINTRAG'),
+    );
+}
+
+/**
+ * Eine Ansage auf Zuruf des Waechters (bin/fw_ansage.php). $eingabe: JSON {"anlass": "gestoert"|"wieder",
+ * "nr": Zeilennummer, "name": Name des Sticks}. Rueckgabe array(Rueckgabewert, Zeile fuer stdout):
+ * 0 gesendet, 1 gescheitert, 3 nichts gesendet ohne Fehler (aus, abgewaehlt, gesperrt), 2 Aufruf falsch.
+ * Die Zeile ist ASCII und traegt weder Text noch Token.
+ */
+function fw_ansage_ausfuehren($eingabe, $jetzt = null)
+{
+    $jetzt = $jetzt === null ? time() : (int) $jetzt;
+    $d = is_string($eingabe) ? json_decode($eingabe, true) : null;
+    $anl = fw_ansage_anlaesse();
+    if (!is_array($d) || !isset($d['anlass']) || !is_string($d['anlass']) || !isset($anl[$d['anlass']])
+        || !isset($d['nr']) || !is_int($d['nr']) || $d['nr'] < 1 || $d['nr'] > 99
+        || !isset($d['name']) || !is_string($d['name']) || trim($d['name']) === '') {
+        return array(2, 'ANSAGE;STAND=0;KENNUNG=AUFRUF');
+    }
+    $cfg = fw_config(false);
+    if (!fw_ansage_an($cfg)) {
+        return array(3, 'ANSAGE;STAND=-2;KENNUNG=AUS');
+    }
+    if (empty($cfg[$anl[$d['anlass']]])) {
+        return array(3, 'ANSAGE;STAND=-1;KENNUNG=ABGEWAEHLT');
+    }
+    $p = fw_paths();
+    if ($p['datadir'] === '' || !@is_dir($p['datadir'])) {
+        return array(1, 'ANSAGE;STAND=0;KENNUNG=DATENORDNER');
+    }
+    $wer = ($d['anlass'] === 'gestoert' ? 'Stoerung' : 'Entwarnung') . ' Zeile ' . $d['nr'];
+    $fh = @fopen($p['datadir'] . '/ansage.lock', 'c');
+    if ($fh === false || !@flock($fh, LOCK_EX)) {
+        if ($fh !== false) { @fclose($fh); }
+        return array(1, 'ANSAGE;STAND=0;KENNUNG=SPERRDATEI');
+    }
+    $datei = $p['datadir'] . '/ansage.json';
+    $m = fw_json_lesen($datei);
+    $sperre = (is_array($m) && isset($m['sperre']) && is_array($m['sperre'])) ? $m['sperre'] : array();
+    $schl = $d['anlass'] . '|' . $d['nr'];
+    $zuletzt = isset($sperre[$schl]) ? (int) $sperre[$schl] : 0;
+    if ($zuletzt > 0 && ($jetzt - $zuletzt) < FW_ANSAGE_SPERRE_S && ($jetzt - $zuletzt) >= -300) {
+        @flock($fh, LOCK_UN);
+        @fclose($fh);
+        fw_log('Ansage: ' . $wer . ' innerhalb von 30 min nach der letzten Ansage dieses Anlasses - '
+               . 'nicht angesagt (Wiederholsperre).');
+        return array(3, 'ANSAGE;STAND=-1;KENNUNG=SPERRE');
+    }
+    $sperre[$schl] = $jetzt;
+    foreach ($sperre as $kk => $t) {
+        if (!is_string($kk) || ($jetzt - (int) $t) > 86400 || ($jetzt - (int) $t) < -86400) { unset($sperre[$kk]); }
+    }
+    if (!fw_json_schreiben($datei, array('sperre' => $sperre), 0600)) {
+        fw_log('WARNUNG: Der Merker fuer die Ansage liess sich nicht schreiben (' . $datei . ').');
+    }
+    @flock($fh, LOCK_UN);
+    @fclose($fh);
+    $satz = trim(html_entity_decode(strip_tags(sprintf(fw_t('DURCHSAGE.TEXT_' . strtoupper($d['anlass'])),
+                                                       trim($d['name']))), ENT_QUOTES, 'UTF-8'));
+    $k = fw_ansage_k();
+    $r = ansage_sprechen($satz, fw_tts($cfg), $k);
+    if ($r['stand'] === 1) {
+        fw_log('Ansage: ' . $wer . ' angesagt (' . ansage_kurz($r) . ').');
+    } else {
+        fw_log('Ansage: ' . $wer . ' nicht angesagt: ' . ansage_kennung_text($r['kennung'], $k)
+               . '. LoxBerry-Meldung, SignalBot, MQTT und Endpunkt sind davon nicht betroffen; es wird nicht wiederholt.');
+    }
+    $z = 'ANSAGE;' . preg_replace('/[^\x20-\x7E]/', '?', str_replace(' ', ';', ansage_kurz($r)));
+    return array($r['stand'] === 1 ? 0 : ($r['stand'] === -1 ? 3 : 1), $z);
+}
+
+/** Die Zeile der Selbstpruefung: true Haken, false Kreuz, null Strich (aus). Klartext (die Ausgabe maskiert). */
+function fw_pruefe_ansage($cfg = null)
+{
+    $k = fw_ansage_k();
+    $k['e'] = function ($s) { return (string) $s; };
+    list($st, $text) = ansage_pruefzeile(fw_tts($cfg), true, $k);
+    return array($st === 1 ? true : ($st === -2 ? null : false), $text);
 }
 
 /* ==================================================================

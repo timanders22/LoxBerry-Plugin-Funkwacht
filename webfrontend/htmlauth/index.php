@@ -120,6 +120,12 @@ function fw_eingaben_sammeln($form, array $falsch)
         foreach (array('global_aus', 'melden_aktiv', 'signal_ein') as $n) {
             $e['haken'][$n] = !empty($_POST[$n]);
         }
+        /* Nr. 36 b: Felder und Anlaesse der Ansage - nie die Sprechtoken (ansage_x2_felder()). */
+        foreach (ansage_x2_felder(array('modi' => fw_ansage_modi())) as $n) {
+            if (substr($n, -9) === '_loeschen') { $e['haken'][$n] = !empty($_POST[$n]); }
+            elseif (isset($_POST[$n])) { $e['werte'][$n] = $str($_POST[$n]); }
+        }
+        foreach (fw_ansage_anlaesse() as $n) { $e['haken'][$n] = !empty($_POST[$n]); }
     } elseif ($form === 'mqtt') {
         foreach (array('mqtt_topic', 'broker_host', 'broker_port', 'broker_user', 'broker_id') as $n) {
             if (isset($_POST[$n])) { $e['werte'][$n] = $str($_POST[$n]); }
@@ -396,6 +402,16 @@ if ($fw_post && isset($_POST['speichern_geraete'])) {
                       fw_t('EINST.L_RUHEFENSTER'), $fw_k);
         if ($w !== null) { $fw_cfg[$fw_k] = $w; }
     }
+    /* Nr. 36 b (Stufe 2): die Ansage. Jede Beanstandung verhindert das Speichern (Nr. 16); kein
+     * Sprechtoken steht in einer Meldung, ein leeres Tokenfeld heisst "behalten". */
+    $fw_tmangel = array();
+    $fw_tbean = array();
+    $fw_tneu = ansage_formular_lesen($_POST, fw_tts($fw_cfg), $fw_tmangel, $fw_tbean,
+                                     array('modi' => fw_ansage_modi()), fw_ansage_k());
+    foreach ($fw_tmangel as $fw_tm) { $fw_fehler[] = $fw_tm['text']; }
+    foreach ($fw_tbean as $fw_tb) { $fw_falsch[] = $fw_tb; }
+    if (!$fw_tmangel) { $fw_cfg['tts'] = $fw_tneu; }
+    foreach (fw_ansage_anlaesse() as $fw_ak) { $fw_cfg[$fw_ak] = !empty($_POST[$fw_ak]) ? 1 : 0; }
     $fw_cfg['global_aus']   = !empty($_POST['global_aus']) ? 1 : 0;
     $fw_cfg['melden_aktiv'] = !empty($_POST['melden_aktiv']) ? 1 : 0;
     $fw_cfg['signal_ein']   = !empty($_POST['signal_ein']) ? 1 : 0;
@@ -718,6 +734,22 @@ if ($fw_post && isset($_POST['log_leeren']) && empty($_POST['sicher_log'])) {
         $fw_misslungen[] = sprintf(fw_t('LOG.LEEREN_FEHL'), $fw_p['log']);
     }
     $fw_tab = 'tab-log';
+}
+
+/* ---------------- Testansage (Nr. 36 b) ----------------
+ * Ins Protokoll nur die Kurzform ohne Text und Token. */
+if ($fw_post && isset($_POST['ansage_test'])) {
+    $fw_ak = fw_ansage_k();
+    $fw_ar = ansage_testansage(fw_tts(fw_config()), $fw_ak);
+    fw_log('Testansage: ' . ansage_kurz($fw_ar));
+    if ($fw_ar['stand'] === 1) {
+        $fw_meldungen[] = fw_t('DURCHSAGE.M_TEST_OK');
+    } elseif ($fw_ar['stand'] === -1) {
+        $fw_meldungen[] = sprintf(fw_t('DURCHSAGE.M_TEST_NICHTS'), ansage_kennung_text($fw_ar['kennung'], $fw_ak));
+    } else {
+        $fw_misslungen[] = sprintf(fw_t('DURCHSAGE.M_TEST_FEHL'), ansage_kennung_text($fw_ar['kennung'], $fw_ak));
+    }
+    $fw_tab = 'tab-test';
 }
 
 /* ---------------- Test ---------------- */
@@ -1227,6 +1259,25 @@ if ($fw_dzeilen) {
   <p class="sm-hilfe"><?= fw_t('MELD.H_SIGNAL_URL') ?></p>
 </div>
 
+<?php /* Nr. 36 b (Stufe 2): Ansage ueber die gemeinsame Sprachausgabe, ab Werk aus. */ ?>
+<h2><?= fw_e(fw_t('DURCHSAGE.H')) ?></h2>
+<div class="sm-hinweis"><?= fw_e(fw_t('DURCHSAGE.TEXT_HILFE')) ?></div>
+<div class="sm-feld">
+  <label><?= fw_e(fw_t('DURCHSAGE.L_ANLAESSE')) ?></label>
+<?php foreach (fw_ansage_anlaesse() as $fw_ab => $fw_akk) { ?>
+  <label style="display:inline-flex;align-items:center;gap:8px;margin-right:14px;">
+    <input data-role="none" type="checkbox" name="<?= fw_e($fw_akk) ?>" value="1"<?= fw_eh('settings', $fw_akk, $fw_cfg[$fw_akk]) ? ' checked' : '' ?>>
+    <?= fw_e(fw_t('DURCHSAGE.A_' . strtoupper($fw_ab))) ?>
+  </label>
+<?php } ?>
+  <div class="sm-hilfe"><?= fw_e(fw_t('DURCHSAGE.H_ANLAESSE')) ?></div>
+</div>
+<?= ansage_formular_html(fw_tts($fw_cfg), array(
+    'w' => function ($n, $g) { return fw_ew('settings', $n, $g); },
+    'm' => function ($n) { return fw_ek('settings', $n); },
+    'c' => function ($n, $g) { return fw_eh('settings', $n, $g); },
+    'modi' => fw_ansage_modi()), fw_ansage_k()) ?>
+
 <div class="sm-legende">
 <span><i class="sm-punkt sm-b-aktion"></i> <?= fw_t('LEGENDE.AKTION_SPEICHERN') ?></span>
 </div>
@@ -1622,6 +1673,11 @@ $fw_bl = fw_bausteinliste(); ?>
     <input data-role="none" type="hidden" name="activetab" value="tab-test">
     <input data-role="none" type="hidden" name="fmt" value="<?= fw_e($fw_merkmal) ?>">
     <input data-role="none" type="hidden" name="aktion" value="wartung"><button data-role="none" class="sm-btn sm-b-aktion" type="submit" name="wartung" value="0"><?= fw_e(fw_t('TEST.K_WARTUNG_AUS')) ?></button>
+  </form>
+  <form action="index.php" method="post">
+    <input data-role="none" type="hidden" name="activetab" value="tab-test">
+    <input data-role="none" type="hidden" name="fmt" value="<?= fw_e($fw_merkmal) ?>">
+    <button data-role="none" class="sm-btn sm-b-aktion" type="submit" name="ansage_test" value="1"><?= fw_e(fw_t('DURCHSAGE.K_TEST')) ?></button>
   </form>
   <form action="index.php" method="post">
     <input data-role="none" type="hidden" name="activetab" value="tab-test">
