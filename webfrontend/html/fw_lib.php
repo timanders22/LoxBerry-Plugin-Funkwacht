@@ -1325,9 +1325,11 @@ function fw_bausteinliste()
     $r = function ($k) use (&$nr) { return '#' . $nr[$k]; };
     $opt = function ($typ) { return sprintf(fw_t('LOX.BS_OPTIONAL'), fw_t($typ)); };
 
-    $neu('zustand', fw_t('LOX.BS_T_STATUS'), fw_t('LOX.BS_N_ZUSTAND'), fw_t('LOX.BS_P_KEINE'), $s('OK'));
+    $neu('zustand', fw_t('LOX.BS_T_STATUS'), fw_t('LOX.BS_N_ZUSTAND'), fw_t('LOX.BS_P_KEINE'),
+         sprintf(fw_t('LOX.BS_E_V1'), $s('OK')));
     $neu('krank', fw_t('LOX.BS_T_AWV'), fw_t('LOX.BS_N_KRANK'), fw_t('LOX.BS_P_KRANK'), $s('KRANK'));
-    $neu('alarm', fw_t('LOX.BS_T_STATUS'), fw_t('LOX.BS_N_ALARM'), fw_t('LOX.BS_P_KEINE'), $s('ALARM'));
+    $neu('alarm', fw_t('LOX.BS_T_STATUS'), fw_t('LOX.BS_N_ALARM'), fw_t('LOX.BS_P_KEINE'),
+         sprintf(fw_t('LOX.BS_E_V1'), $s('ALARM')));
     $neu('tot', fw_t('LOX.BS_T_AWV'), fw_t('LOX.BS_N_TOT'), fw_t('LOX.BS_P_TOT'), $s('ALTER'));
     $neu('oder1', fw_t('LOX.BS_T_ODER'), fw_t('LOX.BS_N_ODER1'), fw_t('LOX.BS_P_KEINE'),
          sprintf(fw_t('LOX.BS_E_ZWEI'), $r('krank'), $r('alarm')));
@@ -1341,7 +1343,8 @@ function fw_bausteinliste()
     $neu('heilung', fw_t('LOX.BS_T_AWV'), fw_t('LOX.BS_N_HEILUNG'), fw_t('LOX.BS_P_HEILUNG'),
          sprintf(fw_t('LOX.BS_E_FORMEL'), $s('VERSUCHE'), $s('GEHEILT')));
     $neu('flattert', fw_t('LOX.BS_T_AWV'), fw_t('LOX.BS_N_FLATTERT'), fw_t('LOX.BS_P_FLATTERT'), $g('NEUSTARTS'));
-    $neu('warum', $opt('LOX.BS_T_STATUS'), fw_t('LOX.BS_N_WARUM'), fw_t('LOX.BS_P_WARUM'), $g('WARUMNR'));
+    $neu('warum', $opt('LOX.BS_T_STATUS'), fw_t('LOX.BS_N_WARUM'), fw_t('LOX.BS_P_WARUM'),
+         sprintf(fw_t('LOX.BS_E_V1'), $g('WARUMNR')));
     $neu('gesperrt', $opt('LOX.BS_T_MERKER'), fw_t('LOX.BS_N_GESPERRT'), fw_t('LOX.BS_P_KEINE'), $s('GESPERRT'));
     $neu('statistik', fw_t('LOX.BS_T_STATISTIK'), fw_t('LOX.BS_N_STATISTIK'), fw_t('LOX.BS_P_STATISTIK'),
          $s('GEHEILT'));
@@ -2266,9 +2269,8 @@ function fw_ansage_k()
         'kopf'   => array('User-Agent: LoxBerry Funkwacht'),
         'ordner' => ($p['datadir'] !== '' && @is_dir($p['datadir'])) ? $p['datadir'] : '',
         't'      => function ($s) { return fw_t($s); },
-        /* Zu dieser Kennung hat das Modul (1.0.2) keinen Satz; linieneigen, bis der Modulschluessel
-         * mit Stufe 2 kommt (Entwurf, Stufe 2). */
-        'schluessel' => array('K_TTS_EINTRAG' => 'DURCHSAGE.SICH_EINTRAG'),
+        /* K_TTS_EINTRAG: den Satz bringt das Modul seit 1.1.2 selbst mit; die Umlenkung auf
+         * DURCHSAGE.SICH_EINTRAG ist seit 1.0.13 gestrichen (X-10). Ab Werk aus - kein 'werk'. */
     );
 }
 
