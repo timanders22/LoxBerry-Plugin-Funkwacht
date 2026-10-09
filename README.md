@@ -4,10 +4,21 @@
 Merkt, wenn ein Stick verstummt, weckt ihn in Stufen wieder auf — und misst
 nach, ob es geholfen hat.
 
-Version 1.0.13 · LoxBerry ab 3.0 · PHP 7.4 und 8.x · Python 3 mit paho-mqtt
+Version 1.0.14 · LoxBerry ab 3.0 · PHP 7.4 und 8.x · Python 3 mit paho-mqtt
 (Debian-Paket, über `dpkg/apt`)
 
 ---
+
+## Neu in 1.0.14
+
+Reiter „Einbindung in Loxone“ zeigt ein Bild der Bausteine aus dem gemeinsamen Musterprojekt und
+verlinkt die Projektdatei.
+
+* Unter der Baustein-Liste steht das Bild der Seite „Funkwacht“ aus dem
+  [LoxBerry-Plugins Musterprojekt](https://github.com/timanders22/LoxBerry-Plugins-Musterprojekt); das Bild liegt im Plugin,
+  nachgeladen wird nichts. Config kürzt lange Bausteinnamen, die vollen Namen stehen in der Tabelle.
+* Baustein-Liste unverändert.
+* Gerendert unter PHP 7.4, 8.4 und 8.5, nicht am Gerät angesehen.
 
 ## Neu in 1.0.13
 
@@ -451,7 +462,9 @@ hinaus, denn ein Alter wäre beim Senden immer null.
 
 Je Stick dreizehn Eingänge, dazu zehn Summenwerte. Der Reiter *Einbindung in
 Loxone* enthält beide Vorlagen zum Einlesen und die **komplette
-Baustein-Liste** zum Nachbauen.
+Baustein-Liste** zum Nachbauen. Fertig verbunden stehen die Bausteine auf der
+Seite „Funkwacht“ im [LoxBerry-Plugins Musterprojekt](https://github.com/timanders22/LoxBerry-Plugins-Musterprojekt),
+einer gemeinsamen Projektdatei mit allen Plugin-Seiten und Vorlagen.
 
 **Die Nummer eines Sticks ist seine Zeilennummer.** Zeile 3 heißt in Loxone
 immer `G3…`, auch wenn Zeile 1 und 2 leer sind — eine geleerte Zeile behält

@@ -924,6 +924,10 @@ if ($fw_rahmen) {
    loeschte den Pfeil des Auswahlfelds (siehe oben). */
 .sm-wrap input.sm-beanstandet, .sm-wrap select.sm-beanstandet {
     border: 2px solid #b00000 !important; background-color: #fff5f4 !important; }
+/* Ergaenzung (Welle Bild, Entscheidung 45): Bild der Bausteine aus dem gemeinsamen Musterprojekt. */
+.sm-bild { margin: 12px 0; }
+.sm-bild img { max-width: 100%; height: auto; border: 1px solid #ccc; border-radius: 4px; background: #fff; }
+.sm-bild figcaption { font-size: .9em; color: #555; margin-top: 4px; }
 
 </style>
 
@@ -1516,6 +1520,11 @@ $fw_bl = fw_bausteinliste(); ?>
 <div class="sm-hilfe"><?php foreach ($fw_bl['hinweise'] as $fw_bh) {
     echo '<b>' . sprintf(fw_e(fw_t('LOX.BS_ZU')), $fw_bh[0]) . '</b> ' . $fw_bh[1] . ' ';
 } ?><?= fw_t('LOX.BS_H_ZEIT') ?></div>
+<figure class="sm-bild">
+<img src="einbindung_loxone.png" alt="<?= fw_e(fw_t('LOX.BILD_ALT')) ?>" loading="lazy">
+<figcaption><?= fw_e(fw_t('LOX.BILD_UNTERSCHRIFT')) ?></figcaption>
+</figure>
+<div class="sm-hilfe"><?= fw_t('LOX.MUSTERPROJEKT') ?></div>
 
 <h3><?= fw_e(fw_t('LOX.H_GEGENPROBE')) ?></h3>
 <div class="sm-step"><?= fw_t('LOX.GEGENPROBE_TEXT') ?></div>
