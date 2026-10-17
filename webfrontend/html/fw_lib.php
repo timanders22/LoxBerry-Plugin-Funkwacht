@@ -1143,7 +1143,9 @@ function fw_felder()
     return array(
         'OK'        => array('',  0,  1,          'FW_FELD.OK'),
         'STUFE'     => array('',  0,  3,          'FW_FELD.STUFE'),
-        'ALTER'     => array('s', -1, 86400,      'FW_FELD.G_ALTER'),
+        /* Welle Bild 15 (1.0.15, Entwurf Welle 15 fw, E11): MaxVal ist in Loxone die Validierungsgrenze -
+         * bis 1.0.14 stand hier 86400, und ein Stick, der laenger als einen Tag schweigt, zeigte 0. */
+        'ALTER'     => array('s', -1, 31536000,   'FW_FELD.G_ALTER'),
         'HEILUNGEN' => array('',  0,  9999,       'FW_FELD.HEILUNGEN'),
         'VERSUCHE'  => array('',  0,  9999,       'FW_FELD.VERSUCHE'),
         'ABGELEHNT' => array('',  0,  9999,       'FW_FELD.ABGELEHNT'),
@@ -1170,7 +1172,9 @@ function fw_summenfelder()
         'GESPERRT' => array('',  0, 1,          'FW_FELD.SUM_GESPERRT'),
         'WARTUNG'  => array('s', 0, 86400,      'FW_FELD.SUM_WARTUNG'),
         'TS'       => array('',  0, 4102444800, 'FW_FELD.SUM_TS'),
-        'ALTER'    => array('s', 0, 86400,      'FW_FELD.SUM_ALTER'),
+        /* Welle Bild 15 (1.0.15, E11): MinVal -1, denn ohne stand.json liefert der Endpunkt ALTER=-1
+         * (bis 1.0.14 MinVal 0: Loxone zeigte "gerade geprueft"); MaxVal wie je Stick. */
+        'ALTER'    => array('s', -1, 31536000, 'FW_FELD.SUM_ALTER'),
     );
 }
 
@@ -1288,84 +1292,111 @@ function fw_vorlage_vo()
 }
 
 /**
- * Die Baustein-Liste fuer den Reiter "Einbindung in Loxone" (Nachzug G2,
- * 02.10.2026; bis 1.0.10 fertiges HTML in der Sprachdatei).
+ * Der erste eingetragene Stick statt des Mustersticks "Zigbee" der Musterliste (Welle Bild 15, 1.0.15).
  *
- * Nummern und Verweise werden GERECHNET, nie getippt: kommt eine Zeile dazu,
- * verschoebe sich sonst jeder Verweis lautlos. Die Namen der Eingaenge kommen
- * aus derselben Quelle wie die Importvorlage (fw_vorlage()): Summenfelder als
- * 'FW_' . Feld, Felder je Stick ueber fw_titel() des ERSTEN eingetragenen
- * Sticks. Regel A4 (Regeln/04): ein ODER belegt hoechstens zwei Eingaenge,
- * jede Zeile verweist nur auf kleinere Nummern.
+ * Rueckgabe: Ersetzungstabelle fuer strtr() ueber Zeilen, Kaesten und Hinweise der Baustein-Listen. Die Formen
+ * stehen so in der Liste: FW_ZIGBEE_<FELD> (Titel wie fw_titel() der Importvorlage), FW_QUITT_ZIGBEE (wie
+ * fw_vorlage_vo()), funkwacht_geraet1_<thema> (Virtueller Texteingang: so benennt das MQTT-Gateway das Thema
+ * <praefix>/geraet<n>/<thema>), Zigbee in deutschen und englischen Anfuehrungszeichen sowie Zigbee- und
+ * "Zigbee " in Bausteinnamen wie "Zigbee-Stick" oder "Zigbee Fehlversuche heute". Ohne eingetragenen Stick
+ * bleibt das Beispiel; nur das Themenpraefix folgt der Einstellung. strtr() ersetzt die laengste Form zuerst
+ * und nie zweimal. Die Datei bleibt reines ASCII: Anfuehrungszeichen als \u{201E}, \u{201C}, \u{201D}.
+ */
+function fw_bs_beispiel()
+{
+    $geraete = fw_geraete();
+    $erster = $geraete ? reset($geraete) : null;
+    $cfg = fw_config();
+    $thema = trim(str_replace('/', '_', isset($cfg['mqtt_topic']) ? (string) $cfg['mqtt_topic'] : ''), '_');
+    if ($thema === '') { $thema = 'funkwacht'; }
+    $nr = $erster ? (int) $erster['nr'] : 1;
+    $map = array('funkwacht_geraet1_' => $thema . '_geraet' . $nr . '_');
+    if ($erster) {
+        $name = (string) $erster['name'];
+        $kopf = fw_titel($erster, $nr, '');
+        $map['FW_ZIGBEE_'] = $kopf;
+        $map['FW_QUITT_ZIGBEE'] = 'FW_QUITT_' . substr($kopf, 3, -1);
+        $map["\u{201E}Zigbee\u{201C}"] = "\u{201E}" . $name . "\u{201C}";
+        $map["\u{201C}Zigbee\u{201D}"] = "\u{201C}" . $name . "\u{201D}";
+        $map['Zigbee-'] = $name . '-';
+        $map['Zigbee '] = $name . ' ';
+    }
+    return $map;
+}
+
+/**
+ * Die Baustein-Listen fuer den Reiter "Einbindung in Loxone" (Welle Bild 15, 1.0.15; Hausherr 11.10.2026:
+ * Vollausstattung, ein absoluter Laie soll das Maximum leicht uebernehmen koennen; Entwurf Welle 15 fw,
+ * Entscheidung 12). Drei Seiten aus dem LoxBerry-Plugins Musterprojekt, dort in Loxone Config gebaut und
+ * verbunden (Musterprojekt/baustein_listen.txt, Abschnitte "Funkwacht" 21, "Funkwacht Sticks" 30 und
+ * "Funkwacht Steuerung" 6 Zeilen, wortgleich). Je Tabellenzeile EIN Sprachschluessel LOX.Z<seite>_<nn> =
+ * "Typ | Name | Parameter | Eingaenge" ohne Auszeichnung; index.php gibt jede Zelle und jeden Satz maskiert
+ * aus. Den Musterstick ersetzt fw_bs_beispiel() durch den ersten eingetragenen Stick.
  *
- * Rueckgabe: 'zeilen' (Nummer, Typ, Name, Parameter, Eingaenge - fertiges
- * HTML: Texte aus der Sprachdatei, Titel maskiert), 'hinweise' (Verweis,
- * Satz), 'je_stick' (Satz).
+ * Bis 1.0.14 rechnete diese Funktion eine Liste mit 15 Zeilen (Nachzug G2, 02.10.2026), die vom Bild abwich
+ * und Unbaubares enthielt: Merker als Quelle, Statistik als Baustein, Vergleicher ohne Von/Voff (die
+ * Werkseinstellung 5/1 meldete einen einzelnen gestoerten Stick nie), den Status-Ausgang als Alarmweg.
+ *
+ * Rueckgabe: je Seite 'kopf', 'seite' (Name der Musterseite), 'bild', 'schritte' und 'hinweise' (Saetze),
+ * 'zeilen' (je array(Nummer, Typ, Name, Parameter, Eingaenge)) - alles reiner Text.
  */
 function fw_bausteinliste()
 {
-    $sum = fw_summenfelder();
-    $gf = fw_felder();
-    $geraete = fw_geraete();
-    $erster = $geraete ? reset($geraete) : null;
-    $mono = function ($titel) { return "<span class='sm-mono'>" . fw_e($titel) . '</span>'; };
-    $s = function ($feld) use ($sum, $mono) {
-        return $mono(isset($sum[$feld]) ? 'FW_' . $feld : '?' . $feld);
-    };
-    $g = function ($feld) use ($gf, $erster, $mono) {
-        if (!isset($gf[$feld])) { return $mono('?' . $feld); }
-        return $mono($erster ? fw_titel($erster, (int) $erster['nr'], $feld) : 'FW_NAME_' . $feld);
-    };
-    $z = array();
-    $nr = array();
-    $neu = function ($k, $typ, $name, $param, $eing) use (&$z, &$nr) {
-        $nr[$k] = count($z) + 1;
-        $z[] = array($nr[$k], $typ, $name, $param, $eing);
-    };
-    $r = function ($k) use (&$nr) { return '#' . $nr[$k]; };
-    $opt = function ($typ) { return sprintf(fw_t('LOX.BS_OPTIONAL'), fw_t($typ)); };
-
-    $neu('zustand', fw_t('LOX.BS_T_STATUS'), fw_t('LOX.BS_N_ZUSTAND'), fw_t('LOX.BS_P_KEINE'),
-         sprintf(fw_t('LOX.BS_E_V1'), $s('OK')));
-    $neu('krank', fw_t('LOX.BS_T_AWV'), fw_t('LOX.BS_N_KRANK'), fw_t('LOX.BS_P_KRANK'), $s('KRANK'));
-    $neu('alarm', fw_t('LOX.BS_T_STATUS'), fw_t('LOX.BS_N_ALARM'), fw_t('LOX.BS_P_KEINE'),
-         sprintf(fw_t('LOX.BS_E_V1'), $s('ALARM')));
-    $neu('tot', fw_t('LOX.BS_T_AWV'), fw_t('LOX.BS_N_TOT'), fw_t('LOX.BS_P_TOT'), $s('ALTER'));
-    $neu('oder1', fw_t('LOX.BS_T_ODER'), fw_t('LOX.BS_N_ODER1'), fw_t('LOX.BS_P_KEINE'),
-         sprintf(fw_t('LOX.BS_E_ZWEI'), $r('krank'), $r('alarm')));
-    $neu('sammel', fw_t('LOX.BS_T_ODER'), fw_t('LOX.BS_N_SAMMEL'), fw_t('LOX.BS_P_KEINE'),
-         sprintf(fw_t('LOX.BS_E_ZWEI'), $r('oder1'), $r('tot')));
-    $neu('meldung', fw_t('LOX.BS_T_BENACHR'), fw_t('LOX.BS_N_MELDUNG'), fw_t('LOX.BS_P_MELDUNG'),
-         sprintf(fw_t('LOX.BS_E_NUR'), $r('sammel')));
-    $neu('gesund', fw_t('LOX.BS_T_MERKER'), fw_t('LOX.BS_N_GESUND'), fw_t('LOX.BS_P_GESUND'), $g('OK'));
-    $neu('verschleiss', fw_t('LOX.BS_T_AWV'), fw_t('LOX.BS_N_VERSCHLEISS'), fw_t('LOX.BS_P_VERSCHLEISS'),
-         $g('HEIL7T'));
-    $neu('heilung', fw_t('LOX.BS_T_AWV'), fw_t('LOX.BS_N_HEILUNG'), fw_t('LOX.BS_P_HEILUNG'),
-         sprintf(fw_t('LOX.BS_E_FORMEL'), $s('VERSUCHE'), $s('GEHEILT')));
-    $neu('flattert', fw_t('LOX.BS_T_AWV'), fw_t('LOX.BS_N_FLATTERT'), fw_t('LOX.BS_P_FLATTERT'), $g('NEUSTARTS'));
-    $neu('warum', $opt('LOX.BS_T_STATUS'), fw_t('LOX.BS_N_WARUM'), fw_t('LOX.BS_P_WARUM'),
-         sprintf(fw_t('LOX.BS_E_V1'), $g('WARUMNR')));
-    $neu('gesperrt', $opt('LOX.BS_T_MERKER'), fw_t('LOX.BS_N_GESPERRT'), fw_t('LOX.BS_P_KEINE'), $s('GESPERRT'));
-    $neu('statistik', fw_t('LOX.BS_T_STATISTIK'), fw_t('LOX.BS_N_STATISTIK'), fw_t('LOX.BS_P_STATISTIK'),
-         $s('GEHEILT'));
-    $neu('quitt', $opt('LOX.BS_T_VA'), fw_t('LOX.BS_N_QUITT'), fw_t('LOX.BS_P_QUITT'), fw_t('LOX.BS_E_TASTER'));
-
-    $und = function ($a, $b) { return sprintf(fw_t('LOX.BS_UND'), $a, $b); };
-    $hinweise = array(
-        array($und($r('krank'), $r('tot')), fw_t('LOX.BS_H_EVZ')),
-        array($r('alarm'), fw_t('LOX.BS_H_ALARM')),
-        array($und($r('oder1'), $r('sammel')), sprintf(fw_t('LOX.BS_H_ODER'), $r('sammel'))),
-        array($r('meldung'), fw_t('LOX.BS_H_BENACHR')),
-        array($r('verschleiss'), fw_t('LOX.BS_H_VERSCHLEISS')),
-        array($r('heilung'), fw_t('LOX.BS_H_HEILUNG')),
-        array($r('flattert'), fw_t('LOX.BS_H_FLATTERT')),
-        array($r('gesperrt'), fw_t('LOX.BS_H_GESPERRT')),
+    $map = fw_bs_beispiel();
+    $seiten = array(
+        array('kopf' => fw_t('LOX.BS1_H'), 'seite' => 'Funkwacht', 'bild' => 'einbindung_loxone.png', 'z' => 1, 'n' => 21,
+              'schritte' => array(
+                sprintf(fw_t('LOX.BS1_S1'), fw_t('REITER.EINSTELLUNGEN'), fw_t('VORL.H'), fw_t('DIENST.K_START'), fw_t('REITER.TEST'), fw_t('TEST.K_ZEILE')),
+                sprintf(fw_t('LOX.BS1_S2'), fw_t('REITER.LOXONE'), fw_t('LOX.K_VI')),
+                fw_t('LOX.BS1_S3'),
+                fw_t('LOX.BS1_S4'),
+                fw_t('LOX.BS1_S5'),
+                fw_t('LOX.BS1_S6')),
+              'hinweise' => array(
+                fw_t('LOX.BS1_H1'),
+                fw_t('LOX.BS1_H2'),
+                fw_t('LOX.BS1_H3'),
+                fw_t('LOX.BS1_H4'),
+                fw_t('LOX.BS1_H5'),
+                fw_t('LOX.BS1_H6'),
+                sprintf(fw_t('LOX.BS1_H7'), fw_t('LOX.K_TOKEN_NEU'), fw_t('REITER.LOXONE')))),
+        array('kopf' => fw_t('LOX.BS2_H'), 'seite' => 'Funkwacht Sticks', 'bild' => 'einbindung_loxone_sticks.png', 'z' => 2, 'n' => 30,
+              'schritte' => array(
+                sprintf(fw_t('LOX.BS2_S1'), fw_t('LOX.K_VI')),
+                fw_t('LOX.BS2_S2'),
+                sprintf(fw_t('LOX.BS2_S3'), fw_t('MQTT.EIN')),
+                fw_t('LOX.BS2_S4'),
+                fw_t('LOX.BS2_S5'),
+                sprintf(fw_t('LOX.BS2_S6'), fw_t('REITER.TEST'), fw_t('TEST.K_MESSEN1'))),
+              'hinweise' => array(
+                fw_t('LOX.BS2_H1'),
+                sprintf(fw_t('LOX.BS2_H2'), fw_t('EINST.L_ART2'), fw_t('FW_ART.DIENST'), fw_t('EINST.L_VERKN')),
+                fw_t('LOX.BS2_H3'),
+                fw_t('LOX.BS2_H4'),
+                fw_t('LOX.BS2_H5'))),
+        array('kopf' => fw_t('LOX.BS3_H'), 'seite' => 'Funkwacht Steuerung', 'bild' => 'einbindung_loxone_steuerung.png', 'z' => 3, 'n' => 6,
+              'schritte' => array(
+                sprintf(fw_t('LOX.BS3_S1'), fw_t('REITER.LOXONE'), fw_t('LOX.K_VQ')),
+                fw_t('LOX.BS3_S2'),
+                fw_t('LOX.BS3_S3'),
+                fw_t('LOX.BS3_S4')),
+              'hinweise' => array(
+                fw_t('LOX.BS3_H1'),
+                fw_t('LOX.BS3_H2'))),
     );
-    $je = array($r('gesund'), $r('verschleiss'), $r('flattert'));
-    $stick = $erster ? sprintf(fw_t('LOX.BS_STICK_ERSTER'), fw_e($erster['name']))
-                     : fw_t('LOX.BS_STICK_KEINER');
-    $je_stick = sprintf(fw_t('LOX.BS_JE_STICK'), $und(implode(', ', $je), $r('warum')), $stick);
-    return array('zeilen' => $z, 'hinweise' => $hinweise, 'je_stick' => $je_stick);
+    $aus = array();
+    $ersetzen = function ($x) use ($map) { return strtr($x, $map); };
+    foreach ($seiten as $s) {
+        $zeilen = array();
+        for ($i = 1; $i <= $s['n']; $i++) {
+            $c = array_pad(explode(' | ', strtr(fw_t(sprintf('LOX.Z%d_%02d', $s['z'], $i)), $map), 4), 4, '');
+            $zeilen[] = array($i, $c[0], $c[1], $c[2], $c[3]);
+        }
+        $aus[] = array('kopf' => $s['kopf'], 'seite' => $s['seite'], 'bild' => $s['bild'],
+                       'schritte' => array_map($ersetzen, $s['schritte']),
+                       'hinweise' => array_map($ersetzen, $s['hinweise']), 'zeilen' => $zeilen);
+    }
+    return $aus;
 }
 
 /**

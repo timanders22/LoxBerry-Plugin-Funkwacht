@@ -928,6 +928,11 @@ if ($fw_rahmen) {
 .sm-bild { margin: 12px 0; }
 .sm-bild img { max-width: 100%; height: auto; border: 1px solid #ccc; border-radius: 4px; background: #fff; }
 .sm-bild figcaption { font-size: .9em; color: #555; margin-top: 4px; }
+/* Welle Bild 15 (1.0.15): Abschnitte, Schritte und Hinweise je Baustein-Liste (wie Alexa NG 1.0.4). */
+.sm-wrap h4.sm-h4 { color: #4f7d17; font-size: 0.98em; font-weight: 700; margin: 22px 0 4px;
+    padding-top: 10px; border-top: 1px solid #e0e0e0; }
+.sm-schritte { margin: 6px 0 0 18px; padding: 0; }
+.sm-schritte li { margin: 3px 0; }
 
 </style>
 
@@ -1502,29 +1507,43 @@ if ($fw_sich_mangel) { ?>
 <div class="sm-step"><?= fw_t('LOX.AUSFALL_TEXT') ?></div>
 
 <h3><?= fw_e(fw_t('LOX.H_BAUSTEINE')) ?></h3>
-<?php /* Nachzug G2: die Liste kommt aus fw_bausteinliste() (Nummern gerechnet,
-   Titel aus der Vorlagenquelle), nicht mehr als fertiges HTML aus der .ini.
-   Typ, Name, Parameter und Saetze stammen aus der Sprachdatei und duerfen
-   ihre Auszeichnung behalten; Titel sind dort schon maskiert. */
+<?php /* Welle Bild 15 (1.0.15; Hausherr 11.10.2026: Vollausstattung, laientauglich; Entwurf Welle 15 fw,
+   Entscheidung 12): drei Seiten aus dem LoxBerry-Plugins Musterprojekt (fw_bausteinliste()). Je Seite:
+   Ueberschrift, Kasten "So uebernehmen Sie diese Seite", Tabelle, Hinweise, Bild, Link - alle immer sichtbar.
+   Jede Zelle und jeder Satz ist reiner Text und wird maskiert; nur BS_H_ZEIT und MUSTERPROJEKT tragen
+   Auszeichnung wie bisher. Bis 1.0.14 stand hier eine gerechnete Tabelle mit 15 Zeilen. */
 $fw_bl = fw_bausteinliste(); ?>
+<p class="sm-hilfe"><?= fw_e(sprintf(fw_t('LOX.BAUSTEINE_VORTEXT'), fw_t('VORL.Z2MNG_MQTT'))) ?></p>
+<p class="sm-hilfe"><?= fw_t('LOX.BS_H_ZEIT') ?></p>
+<?php foreach ($fw_bl as $fw_bs) { ?>
+<h4 class="sm-h4"><?= fw_e($fw_bs['kopf']) ?></h4>
+<div class="sm-hinweis"><b><?= fw_e(fw_t('LOX.SCHRITTE_TITEL')) ?></b>
+<ol class="sm-schritte">
+<?php foreach ($fw_bs['schritte'] as $fw_bx) { ?>
+<li><?= fw_e($fw_bx) ?></li>
+<?php } ?>
+</ol></div>
 <div class="sm-breit"><table class="sm-tbl">
 <tr><th><?= fw_e(fw_t('LOX.BS_SP_NR')) ?></th><th><?= fw_e(fw_t('LOX.BS_SP_TYP')) ?></th>
     <th><?= fw_e(fw_t('LOX.BS_SP_NAME')) ?></th><th><?= fw_e(fw_t('LOX.BS_SP_PARAM')) ?></th>
     <th><?= fw_e(fw_t('LOX.BS_SP_EING')) ?></th></tr>
-<?php foreach ($fw_bl['zeilen'] as $fw_bz) { ?>
-<tr><td><?= (int) $fw_bz[0] ?></td><td><?= $fw_bz[1] ?></td><td><?= $fw_bz[2] ?></td>
-    <td><?= $fw_bz[3] ?></td><td><?= $fw_bz[4] ?></td></tr>
+<?php foreach ($fw_bs['zeilen'] as $fw_bz) { ?>
+<tr><td><?= (int) $fw_bz[0] ?></td><td><?= fw_e($fw_bz[1]) ?></td><td><?= fw_e($fw_bz[2]) ?></td>
+    <td><?= fw_e($fw_bz[3]) ?></td><td><?= fw_e($fw_bz[4]) ?></td></tr>
 <?php } ?>
 </table></div>
-<p class="sm-hilfe"><?= $fw_bl['je_stick'] ?></p>
-<div class="sm-hilfe"><?php foreach ($fw_bl['hinweise'] as $fw_bh) {
-    echo '<b>' . sprintf(fw_e(fw_t('LOX.BS_ZU')), $fw_bh[0]) . '</b> ' . $fw_bh[1] . ' ';
-} ?><?= fw_t('LOX.BS_H_ZEIT') ?></div>
+<div class="sm-warnung"><b><?= fw_e(fw_t('LOX.HINWEISE_TITEL')) ?></b>
+<ul class="sm-schritte">
+<?php foreach ($fw_bs['hinweise'] as $fw_bx) { ?>
+<li><?= fw_e($fw_bx) ?></li>
+<?php } ?>
+</ul></div>
 <figure class="sm-bild">
-<img src="einbindung_loxone.png" alt="<?= fw_e(fw_t('LOX.BILD_ALT')) ?>" loading="lazy">
-<figcaption><?= fw_e(fw_t('LOX.BILD_UNTERSCHRIFT')) ?></figcaption>
+<img src="<?= fw_e($fw_bs['bild']) ?>" alt="<?= fw_e(fw_t('LOX.BILD_ALT')) ?>" loading="lazy">
+<figcaption><?= fw_e(sprintf(fw_t('LOX.BILD_UNTERSCHRIFT'), $fw_bs['seite'])) ?></figcaption>
 </figure>
 <div class="sm-hilfe"><?= fw_t('LOX.MUSTERPROJEKT') ?></div>
+<?php } ?>
 
 <h3><?= fw_e(fw_t('LOX.H_GEGENPROBE')) ?></h3>
 <div class="sm-step"><?= fw_t('LOX.GEGENPROBE_TEXT') ?></div>

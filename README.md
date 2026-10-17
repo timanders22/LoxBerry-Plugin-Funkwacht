@@ -4,10 +4,37 @@
 Merkt, wenn ein Stick verstummt, weckt ihn in Stufen wieder auf — und misst
 nach, ob es geholfen hat.
 
-Version 1.0.14 · LoxBerry ab 3.0 · PHP 7.4 und 8.x · Python 3 mit paho-mqtt
+Version 1.0.15 · LoxBerry ab 3.0 · PHP 7.4 und 8.x · Python 3 mit paho-mqtt
 (Debian-Paket, über `dpkg/apt`)
 
 ---
+
+## Neu in 1.0.15
+
+Einbindung in Loxone in Vollausstattung: drei Seiten aus dem gemeinsamen Musterprojekt mit drei Bildern und
+Schritt-für-Schritt-Anleitung.
+
+* **Reiter „Einbindung in Loxone“:** Statt der bisherigen Liste mit 15 Zeilen stehen dort die drei Seiten des
+  [LoxBerry-Plugins Musterprojekts](https://github.com/timanders22/LoxBerry-Plugins-Musterprojekt), je mit
+  Kasten „So übernehmen Sie diese Seite“, Tabelle, Hinweisen und Bild: „Funkwacht“ (21 Zeilen: Wächter und
+  Sticks, Lebenszeichen `FW_TS` mit Analogwertvalidierung, 300 s Verzögerung vor der Meldung),
+  „Funkwacht Sticks“ (30 Zeilen: alle 13 Werte eines Sticks, Status mit dem Grund, Meldung „Funkstick braucht
+  Pflege“, zwei Texteingänge über das MQTT-Gateway) und „Funkwacht Steuerung“ (6 Zeilen: quittieren und Wartung
+  über die Vorlage der Steuerbefehle). Die Namen folgen dem ersten eingetragenen Stick; ohne Stick steht das
+  Beispiel „Zigbee“.
+* **Wer die alte Liste schon gebaut hat:** an den beiden Analogwert-Vergleichern Von/Voff eintragen
+  („Ein Stick gestört“ 0,5/0,2, „Wächter selbst tot“ 300/120) – mit der Werkseinstellung 5/1 meldete ein
+  einzelner gestörter Stick nie, und „Wächter selbst tot“ schaltete grundlos; das ODER „Stick gestört oder
+  Alarm“ bekommt an I2 direkt `FW_ALARM` (der Ausgang eines Status-Bausteins ist kein Ein/Aus). Merker,
+  „Statistik“ als Baustein und „Versuche minus Heilungen“ entfallen.
+* **Vorlage der virtuellen Eingänge:** `FW_ALTER` jetzt MinVal −1 (ohne Messung liefert der Endpunkt −1),
+  `FW_ALTER` und `FW_<NAME>_ALTER` MaxVal 31536000 statt 86400 – darüber zeigte Loxone 0. Wirkt erst nach
+  neuem Einlesen; am vorhandenen Eingang lassen sich beide Grenzen von Hand ändern.
+* **Texte berichtigt, kein Verhalten geändert:** `STUFE` ist die zuletzt versuchte Stufe (nicht die nächste),
+  `ALARM` steht auch während Mindestabstand, Anlaufschonzeit und Sperren auf 1, `HEILUNGEN`/`GEHEILT`
+  zählen Heilbefehle, die ohne Fehler liefen, `HEIL24`/`HEIL7T` zählen jeden Heilversuch. Die Kommentare der
+  Vorlage ändern sich mit (kein neues Einlesen nötig).
+* Gerendert unter PHP 7.4, 8.4 und 8.5, nicht am Gerät angesehen.
 
 ## Neu in 1.0.14
 
@@ -461,16 +488,16 @@ einer Ausnahme mit Grund: über MQTT geht statt des Alters der **Zeitstempel**
 hinaus, denn ein Alter wäre beim Senden immer null.
 
 Je Stick dreizehn Eingänge, dazu zehn Summenwerte. Der Reiter *Einbindung in
-Loxone* enthält beide Vorlagen zum Einlesen und die **komplette
-Baustein-Liste** zum Nachbauen. Fertig verbunden stehen die Bausteine auf der
-Seite „Funkwacht“ im [LoxBerry-Plugins Musterprojekt](https://github.com/timanders22/LoxBerry-Plugins-Musterprojekt),
+Loxone* enthält beide Vorlagen zum Einlesen und die **kompletten
+Baustein-Listen** der drei Seiten zum Nachbauen. Fertig verbunden stehen die Bausteine auf den
+Seiten „Funkwacht“, „Funkwacht Sticks“ und „Funkwacht Steuerung“ im [LoxBerry-Plugins Musterprojekt](https://github.com/timanders22/LoxBerry-Plugins-Musterprojekt),
 einer gemeinsamen Projektdatei mit allen Plugin-Seiten und Vorlagen.
 
 **Die Nummer eines Sticks ist seine Zeilennummer.** Zeile 3 heißt in Loxone
 immer `G3…`, auch wenn Zeile 1 und 2 leer sind — eine geleerte Zeile behält
 ihren Platz.
 
-Am nützlichsten ist `HEIL7T`: die gelungenen Heilungen der letzten sieben
+Am nützlichsten ist `HEIL7T`: die Heilversuche der letzten sieben
 Tage. Steigt die Zahl über Wochen langsam an, ist ein Stick am Ende seiner
 Kräfte, lange bevor er ganz ausfällt. Gehen `VERSUCHE` und `HEILUNGEN` weit
 auseinander, wirkt das Heilen nicht — dann hilft kein weiterer Neustart,
