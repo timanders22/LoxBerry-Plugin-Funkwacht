@@ -4,10 +4,27 @@
 Merkt, wenn ein Stick verstummt, weckt ihn in Stufen wieder auf — und misst
 nach, ob es geholfen hat.
 
-Version 1.0.15 · LoxBerry ab 3.0 · PHP 7.4 und 8.x · Python 3 mit paho-mqtt
+Version 1.0.16 · LoxBerry ab 3.0 · PHP 7.4 und 8.x · Python 3 mit paho-mqtt
 (Debian-Paket, über `dpkg/apt`)
 
 ---
+
+## Neu in 1.0.16
+
+Baustein-Listen im Reiter „Einbindung in Loxone“ wieder wortgleich mit dem Musterprojekt; kein Verhalten
+geändert.
+
+* **Seite „Funkwacht“:** Die Typen heißen wie in Loxone Config – „Status“ (Nr. 1 und 3), „Analogkomparator“
+  (Nr. 2 und 4) und „Benachrichtigung“ (Nr. 7).
+* **Seite „Funkwacht Sticks“:** `FW_<NAME>_HEIL7T` und `FW_<NAME>_HEIL24` sind „Heilversuche …, auch
+  erfolglose“ (Nr. 7 und 10); „Heilversuche“ statt „Heilungen“ auch beim Schwellwertschalter
+  „Zigbee-Stick verschleißt“ (Nr. 15), in der Meldung „Funkstick braucht Pflege“ (Nr. 27) und im Status
+  „Zigbee-Stick Pflege“ (Nr. 28). Neu verbinden muss niemand; Meldungstext und Statuszeilen lassen sich am
+  vorhandenen Baustein von Hand angleichen. Ebenso im Status „Zigbee-Stick“ (Nr. 9): „<v7> Heilversuche in
+  7 Tagen“.
+* **Reiter „Logdateien“:** Das Balkenbild heißt „Heilversuche je Tag“ – es zählt jeden Versuch, auch einen
+  erfolglosen, wie `HEIL7T`.
+* Gerendert unter PHP 7.4, 8.4 und 8.5, nicht am Gerät angesehen.
 
 ## Neu in 1.0.15
 
@@ -553,7 +570,7 @@ LoxBerry-Benachrichtigungszentrum und wahlweise an SignalBot. Eine Meldung je
 Minute wäre keine Meldung, sondern Rauschen.
 
 Der Reiter *Logdateien* führt außerdem eine **Ereignisliste** mit Zeitpunkten
-und ein **Balkenbild der Heilungen je Tag** über dreißig Tage. Die
+und ein **Balkenbild der Heilversuche je Tag** über dreißig Tage. Die
 Tagesdateien liegen unter `data/` und überstehen einen Neustart.
 
 **Und sie überstehen auch ein Update — aber nicht von selbst.** Der Installer
