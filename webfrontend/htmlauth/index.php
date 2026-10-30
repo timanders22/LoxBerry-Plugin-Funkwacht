@@ -126,6 +126,21 @@ function fw_eingaben_sammeln($form, array $falsch)
             elseif (isset($_POST[$n])) { $e['werte'][$n] = $str($_POST[$n]); }
         }
         foreach (fw_ansage_anlaesse() as $n) { $e['haken'][$n] = !empty($_POST[$n]); }
+        /* Welle Mehrfach-Ziele (1.0.17): die Tabelle der weiteren Ziele (Felder name[N], N = 2..6) - nur, wenn die
+         * Abschrift sie kann. Texte wie die Zeilen g_*[i], Haken je Zeile; nie ein Sprechtoken (die Tabelle hat keins). */
+        if (fw_mit_zielen()) {
+            foreach (array('tts_ziel_art', 'tts_ziel_wo', 'tts_ziel_laut', 'tts_ziel_sprache') as $n) {
+                if (!isset($_POST[$n]) || !is_array($_POST[$n])) { continue; }
+                foreach ($_POST[$n] as $i => $v) {
+                    if (is_int($i) && $i >= 2 && $i <= 6) { $e['werte'][$n . '[' . $i . ']'] = $str($v); }
+                }
+            }
+            foreach (array('tts_ziel_ein', 'tts_ziel_loeschen') as $n) {
+                for ($i = 2; $i <= 6; $i++) {
+                    $e['haken'][$n . '[' . $i . ']'] = isset($_POST[$n]) && is_array($_POST[$n]) && !empty($_POST[$n][$i]);
+                }
+            }
+        }
     } elseif ($form === 'mqtt') {
         foreach (array('mqtt_topic', 'broker_host', 'broker_port', 'broker_user', 'broker_id') as $n) {
             if (isset($_POST[$n])) { $e['werte'][$n] = $str($_POST[$n]); }
@@ -191,11 +206,17 @@ if ($fw_post) {
 
 /* ---------------- Vorlagen herunterladen ---------------- */
 if ($fw_post && isset($_POST['vorlage'])) {
-    list($fw_name, $fw_inhalt) = ((string) $_POST['vorlage'] === 'vq')
-        ? fw_vorlage_vo() : fw_vorlage();
+    /* Gruppe 44 (1.0.17): 'befehle' = Vorlage der Befehlsbruecke (Reiter MQTT). */
+    if ((string) $_POST['vorlage'] === 'befehle') {
+        $fw_vb = fw_vorlage_befehle();
+        list($fw_name, $fw_inhalt) = is_array($fw_vb) ? $fw_vb : array('', '');
+    } else {
+        list($fw_name, $fw_inhalt) = ((string) $_POST['vorlage'] === 'vq')
+            ? fw_vorlage_vo() : fw_vorlage();
+    }
     if ($fw_inhalt === '') {
         $fw_misslungen[] = fw_t('LOX.FEHLER_VORLAGE');
-        $fw_tab = 'tab-loxone';
+        $fw_tab = (string) $_POST['vorlage'] === 'befehle' ? 'tab-mqtt' : 'tab-loxone';
     } else {
         header('Content-Type: application/x-download');
         // Anfuehrungszeichen um den Dateinamen: ohne sie bricht jeder Name
@@ -406,8 +427,9 @@ if ($fw_post && isset($_POST['speichern_geraete'])) {
      * Sprechtoken steht in einer Meldung, ein leeres Tokenfeld heisst "behalten". */
     $fw_tmangel = array();
     $fw_tbean = array();
+    $fw_thinw = array();     // Welle Mehrfach-Ziele (Sprachmodul 1.2.1): Hinweise des Moduls, die das Speichern nicht verhindern
     $fw_tneu = ansage_formular_lesen($_POST, fw_tts($fw_cfg), $fw_tmangel, $fw_tbean,
-                                     array('modi' => fw_ansage_modi()), fw_ansage_k());
+        array('modi' => fw_ansage_modi(), 'ziele' => fw_mit_zielen()), fw_ansage_k(), $fw_thinw);
     foreach ($fw_tmangel as $fw_tm) { $fw_fehler[] = $fw_tm['text']; }
     foreach ($fw_tbean as $fw_tb) { $fw_falsch[] = $fw_tb; }
     if (!$fw_tmangel) { $fw_cfg['tts'] = $fw_tneu; }
@@ -433,6 +455,7 @@ if ($fw_post && isset($_POST['speichern_geraete'])) {
     if (!$fw_fehler) {
         if (fw_config_speichern($fw_cfg)) {
             $fw_meldungen[] = fw_t('ALLG.GESPEICHERT');
+            foreach ($fw_thinw as $fw_th) { $fw_meldungen[] = $fw_th['text']; }     // Welle Mehrfach-Ziele: erst nach dem Speichern
             fw_log('Einstellungen gespeichert.');
         } else {
             $fw_fehler[] = fw_t('FEHLER.SPEICHERN');
@@ -513,6 +536,10 @@ if ($fw_post && isset($_POST['vorlage_setzen'])) {
             $fw_meldungen[] = sprintf(fw_t('VORL.GESETZT'), $fw_i + 1,
                                       fw_klartext($fw_alle[$fw_v]['text']));
             $fw_meldungen[] = fw_t('VORL.PRUEFEN');
+            /* Gruppe 44 (1.0.17, E8): welcher Zigbee-Dienst eingesetzt wurde und warum. */
+            if ($fw_v === 'z2m_paket' || $fw_v === 'z2m_mqtt') {
+                $fw_meldungen[] = fw_klartext('G44.Z_KOPF') . ' ' . fw_zigbee_text(fw_zigbee_dienst());
+            }
         } else {
             $fw_fehler[] = fw_t('FEHLER.SPEICHERN');
         }
@@ -599,6 +626,28 @@ if ($fw_post && isset($_POST['speichern_mqtt'])) {
         }
     } else {
         $fw_eingaben = fw_eingaben_sammeln('mqtt', $fw_falsch);     // X-2
+    }
+    $fw_tab = 'tab-mqtt';
+}
+
+/* ---------------- Gruppe 44 (1.0.17, G2/G3): Reiter MQTT - Befehle ueber MQTT, HTTP-Endpunkt ----------------
+ * Danach die Bruecke starten bzw. anhalten (der Waechter in cron.01min haelt sie danach). */
+if ($fw_post && isset($_POST['speichern_bruecke'])) {
+    $fw_cfg = fw_config();
+    foreach (array('befehle_mqtt_ein', 'endpunkt_ein') as $fw_k) {
+        $fw_cfg[$fw_k] = !empty($_POST[$fw_k]) ? 1 : 0;
+    }
+    if (fw_config_speichern($fw_cfg)) {
+        $fw_meldungen[] = fw_t('ALLG.GESPEICHERT');
+        fw_log('Befehle ueber MQTT ' . ($fw_cfg['befehle_mqtt_ein'] ? 'an' : 'aus') . ', HTTP-Endpunkt '
+             . ($fw_cfg['endpunkt_ein'] ? 'an' : 'aus') . '.');
+        list($fw_brc, $fw_bwas, $fw_baus) = fw_bruecke_schalten($fw_cfg);
+        if ($fw_brc !== null && (int) $fw_brc !== 0) {
+            $fw_fehler[] = sprintf(fw_t('BEFEHL.M_SCHALTEN_FEHL'), $fw_bwas,
+                is_array($fw_baus) ? implode(' ', $fw_baus) : (string) $fw_baus);
+        }
+    } else {
+        $fw_fehler[] = fw_t('FEHLER.SPEICHERN');
     }
     $fw_tab = 'tab-mqtt';
 }
@@ -738,16 +787,25 @@ if ($fw_post && isset($_POST['log_leeren']) && empty($_POST['sicher_log'])) {
 
 /* ---------------- Testansage (Nr. 36 b) ----------------
  * Ins Protokoll nur die Kurzform ohne Text und Token. */
-if ($fw_post && isset($_POST['ansage_test'])) {
-    $fw_ak = fw_ansage_k();
-    $fw_ar = ansage_testansage(fw_tts(fw_config()), $fw_ak);
-    fw_log('Testansage: ' . ansage_kurz($fw_ar));
-    if ($fw_ar['stand'] === 1) {
-        $fw_meldungen[] = fw_t('DURCHSAGE.M_TEST_OK');
-    } elseif ($fw_ar['stand'] === -1) {
-        $fw_meldungen[] = sprintf(fw_t('DURCHSAGE.M_TEST_NICHTS'), ansage_kennung_text($fw_ar['kennung'], $fw_ak));
+/* Welle Mehrfach-Ziele (Sprachmodul 1.2.1): die Knoepfe "Testansage an Ziel n" schicken ansage_test_ziel=n - es spricht
+ * nur dieses Ziel; der bisherige Knopf spricht an alle Ziele gleichzeitig. Eine unbrauchbare Nummer spricht nichts. */
+if ($fw_post && (isset($_POST['ansage_test']) || isset($_POST['ansage_test_ziel']))) {
+    $fw_tk = fw_ansage_k();
+    $fw_tnur = (isset($_POST['ansage_test_ziel']) && fw_mit_zielen()) ? ansage_test_ziel($_POST) : 0;
+    if (isset($_POST['ansage_test_ziel']) && $fw_tnur === 0) {
+        $fw_tr = array('stand' => 0, 'kennung' => 'ZIEL_UNBEKANNT|-', 'art' => '-', 'http' => 0, 'zeile' => '', 'zeichen' => 0);
+    } elseif ($fw_tnur >= 1) {
+        $fw_tr = ansage_testansage(fw_tts(fw_config()), $fw_tk, $fw_tnur);
     } else {
-        $fw_misslungen[] = sprintf(fw_t('DURCHSAGE.M_TEST_FEHL'), ansage_kennung_text($fw_ar['kennung'], $fw_ak));
+        $fw_tr = ansage_testansage(fw_tts(fw_config()), $fw_tk);
+    }
+    fw_log('Testansage' . ($fw_tnur >= 1 ? ' an Ziel ' . $fw_tnur : '') . ': ' . ansage_kurz($fw_tr));
+    if ($fw_tr['stand'] === 1) {
+        $fw_meldungen[] = fw_t('DURCHSAGE.M_TEST_OK');
+    } elseif ($fw_tr['stand'] === -1) {
+        $fw_meldungen[] = sprintf(fw_t('DURCHSAGE.M_TEST_NICHTS'), ansage_kennung_text($fw_tr['kennung'], $fw_tk));
+    } else {
+        $fw_misslungen[] = sprintf(fw_t('DURCHSAGE.M_TEST_FEHL'), ansage_kennung_text($fw_tr['kennung'], $fw_tk));
     }
     $fw_tab = 'tab-test';
 }
@@ -982,6 +1040,13 @@ if ($fw_rahmen) {
     <b id="fw_k_alter"><?= fw_alter() < 0 ? '&ndash;' : (int) fw_alter() ?></b>
     <span class="sm-hilfe"><?= fw_alter() < 0 ? fw_e(fw_t('ALLG.NIE')) : fw_e(fw_t('ALLG.SEKUNDEN')) ?></span>
   </div>
+<?php /* Gruppe 44 (1.0.17): Kachel MQTT in Hausform - gross mqtt_ein, klein Autostart und Fassung des Gateways. */ ?>
+  <div class="sm-kachel">MQTT
+    <b class="<?= !empty($fw_cfg['mqtt_ein']) ? 'sm-an' : 'sm-aus' ?>"><?= fw_e(fw_t(!empty($fw_cfg['mqtt_ein']) ? 'G44.KACHEL_EIN' : 'G44.KACHEL_AUS')) ?></b>
+    <span class="sm-hilfe"><?= fw_e(sprintf(fw_t('G44.KACHEL_HILFE'),
+        !$fw_mqtt['gefunden'] ? fw_t('ALLG.UNBEKANNT') : fw_t($fw_mqtt['autostart'] ? 'G44.KACHEL_EIN' : 'G44.KACHEL_AUS'),
+        (int) $fw_mqtt['fassung'] > 0 ? 'V' . (int) $fw_mqtt['fassung'] : fw_t('ALLG.UNBEKANNT'))) ?></span>
+  </div>
 </div>
 
 <?php if (!empty($fw_stand['sperre'])) { ?>
@@ -1109,7 +1174,7 @@ if ($fw_dzeilen) {
 <table class="sm-tbl">
 <tr><th><?= fw_e(fw_t('VORL.SP_FALL')) ?></th><th><?= fw_e(fw_t('VORL.SP_WERTE')) ?></th>
     <th><?= fw_e(fw_t('VORL.SP_ZEILE')) ?></th></tr>
-<?php foreach (fw_vorlagen() as $fw_vk => $fw_vv) { ?>
+<?php $fw_zb = fw_zigbee_dienst(); foreach (fw_vorlagen($fw_zb) as $fw_vk => $fw_vv) { ?>
 <tr>
   <td><?= fw_e(fw_t($fw_vv['text'])) ?></td>
   <td><span class="sm-hilfe"><?php
@@ -1137,6 +1202,8 @@ if ($fw_dzeilen) {
 <div class="sm-legende">
 <span><i class="sm-punkt sm-b-technik"></i> <?= fw_t('LEGENDE.TECHNIK_VORLAGE') ?></span>
 </div>
+<?php /* Gruppe 44 (1.0.17, E8, B2): der erkannte Zigbee-Dienst und der ungemessene NG-Protokollpfad. */ ?>
+<p class="sm-hilfe"><b><?= fw_e(fw_t('G44.Z_KOPF')) ?></b> <?= fw_e(fw_zigbee_text($fw_zb)) ?> <?= fw_t('G44.Z_HINWEIS') ?></p>
 
 <form action="index.php" method="post">
 <input data-role="none" type="hidden" name="activetab" value="<?= fw_e($fw_tab) ?>">
@@ -1286,7 +1353,10 @@ if ($fw_dzeilen) {
     'w' => function ($n, $g) { return fw_ew('settings', $n, $g); },
     'm' => function ($n) { return fw_ek('settings', $n); },
     'c' => function ($n, $g) { return fw_eh('settings', $n, $g); },
-    'modi' => fw_ansage_modi()), fw_ansage_k()) ?>
+    'modi' => fw_ansage_modi(),
+    /* Welle Mehrfach-Ziele (Sprachmodul 1.2.1): Tabelle der weiteren Ausgabeziele; nach einer Beanstandung traegt sie das Eingetippte. */
+    'ziele' => fw_mit_zielen(),
+    'ziele_post' => fw_eingabe('settings') !== null ? fw_ziele_x2_post(fw_eingabe('settings')) : null), fw_ansage_k()); ?>
 
 <div class="sm-legende">
 <span><i class="sm-punkt sm-b-aktion"></i> <?= fw_t('LEGENDE.AKTION_SPEICHERN') ?></span>
@@ -1430,6 +1500,70 @@ if ($fw_sich_mangel) { ?>
 </div>
 <p class="sm-hilfe"><?= fw_t('MQTT.GERAETN_HILFE') ?></p>
 <p class="sm-hilfe"><?= fw_t('MQTT.RETAIN_HILFE') ?></p>
+
+<?php /* ================= Gruppe 44 (1.0.17): Gateway V2, Befehlsbruecke, HTTP-Endpunkt ================= */ ?>
+<h3><?= fw_e(fw_t('G44.H_V2')) ?></h3>
+<?php if ((int) $fw_mqtt['fassung'] === 1) { ?>
+<p class="sm-hilfe"><?= fw_t('G44.V2_NUR_V1') ?></p>
+<?php } else { $fw_v2 = fw_v2_haken($fw_cfg); ?>
+<p class="sm-hilfe"><?= fw_t('G44.V2_TEXT') ?></p>
+<?php if (!$fw_v2) { ?><div class="sm-warnung"><?= fw_e(fw_t('PRUEF.V2_LEER')) ?></div><?php } else { ?>
+<div class="sm-breit">
+<table class="sm-tbl">
+<tr><th><?= fw_e(fw_t('MQTT.SP_THEMA')) ?></th><th><?= fw_e(fw_t('G44.T_NAME')) ?></th><th>Noncached</th><th><?= fw_e(fw_t('MQTT.SP_BEDEUTUNG')) ?></th></tr>
+<?php foreach ($fw_v2 as $fw_h) { ?>
+<tr><td><span class="sm-mono"><?= fw_e($fw_h['thema']) ?></span></td><td><span class="sm-mono"><?= fw_e($fw_h['name']) ?></span></td>
+    <td><?= fw_e(fw_t($fw_h['noncached'] ? 'ALLG.JA' : 'ALLG.NEIN')) ?></td><td><?= $fw_h['bez'] !== '' ? fw_e(fw_t($fw_h['bez'])) : '' ?></td></tr>
+<?php } ?>
+</table>
+</div>
+<?php } } ?>
+
+<h3><?= fw_e(fw_t('BEFEHL.H_TITEL')) ?></h3>
+<div class="sm-warnung"><?= fw_t('BEFEHL.UDP_HINWEIS') ?></div>
+<form action="index.php" method="post">
+<input data-role="none" type="hidden" name="activetab" value="tab-mqtt">
+<input data-role="none" type="hidden" name="fmt" value="<?= fw_e($fw_merkmal) ?>">
+<div class="sm-feld"><label style="display:inline-flex;align-items:center;gap:8px;">
+  <input data-role="none" type="checkbox" name="befehle_mqtt_ein" value="1"<?= !empty($fw_cfg['befehle_mqtt_ein']) ? ' checked' : '' ?>>
+  <?= fw_e(fw_t('BEFEHL.L_ANNEHMEN')) ?></label><div class="sm-hilfe"><?= fw_t('BEFEHL.H_ANNEHMEN') ?></div></div>
+<div class="sm-feld"><label style="display:inline-flex;align-items:center;gap:8px;">
+  <input data-role="none" type="checkbox" name="endpunkt_ein" value="1"<?= !empty($fw_cfg['endpunkt_ein']) ? ' checked' : '' ?>>
+  <?= fw_e(fw_t('BEFEHL.L_ENDPUNKT')) ?></label><div class="sm-hilfe"><?= fw_t('BEFEHL.H_ENDPUNKT') ?></div></div>
+<div class="sm-legende">
+<span><i class="sm-punkt sm-b-aktion"></i> <?= fw_t('LEGENDE.AKTION_SPEICHERN') ?></span>
+</div>
+<div class="sm-knopfreihe">
+  <button data-role="none" class="sm-btn sm-b-aktion" type="submit" name="speichern_bruecke" value="1"><?= fw_e(fw_t('ALLG.SPEICHERN')) ?></button>
+</div>
+</form>
+<?php list($fw_bl, $fw_blf) = fw_bruecke_liste(); if ($fw_bl === null) { ?>
+<div class="sm-warnung"><?= fw_e($fw_blf) ?></div>
+<?php } else { ?>
+<div class="sm-breit">
+<table class="sm-tbl">
+<tr><th><?= fw_e(fw_t('MQTT.SP_THEMA')) ?></th><th><?= fw_e(fw_t('BEFEHL.T_ART')) ?></th><th><?= fw_e(fw_t('BEFEHL.T_TITEL')) ?></th><th><?= fw_e(fw_t('MQTT.SP_BEDEUTUNG')) ?></th></tr>
+<?php /* Die Befehle stehen unter ['befehle'] der Rueckgabe von bb_liste() (Fremdbefund BYD: nicht ueber die ganze Rueckgabe laufen). */
+foreach ((isset($fw_bl['befehle']) && is_array($fw_bl['befehle']) ? $fw_bl['befehle'] : array()) as $fw_be) { ?>
+<tr><td><span class="sm-mono"><?= fw_e(isset($fw_be['thema']) ? $fw_be['thema'] : '') ?></span></td>
+    <td><?= fw_e(isset($fw_be['art']) ? $fw_be['art'] . (isset($fw_be['min'], $fw_be['max']) ? ' ' . $fw_be['min'] . '–' . $fw_be['max'] : '') : '') ?></td>
+    <td><?= fw_e(isset($fw_be['titel']) ? $fw_be['titel'] : '') ?></td>
+    <td><?= isset($fw_be['kachel']) && $fw_be['kachel'] !== '' ? fw_e(fw_t($fw_be['kachel'])) : '' ?></td></tr>
+<?php } ?>
+</table>
+</div>
+<p class="sm-hilfe"><?= fw_t('BEFEHL.H_STICKS') ?></p>
+<div class="sm-legende">
+<span><i class="sm-punkt sm-b-technik"></i> <?= fw_t('LEGENDE.TECHNIK_XML') ?></span>
+</div>
+<div class="sm-knopfreihe">
+  <form action="index.php" method="post">
+    <input data-role="none" type="hidden" name="activetab" value="tab-mqtt">
+    <input data-role="none" type="hidden" name="fmt" value="<?= fw_e($fw_merkmal) ?>">
+    <button data-role="none" class="sm-btn sm-b-technik" type="submit" name="vorlage" value="befehle"><?= fw_e(fw_t('BEFEHL.K_VORLAGE')) ?></button>
+  </form>
+</div>
+<?php } ?>
 </div>
 
 <!-- ================= Reiter: Einbindung in Loxone ================= -->
@@ -1513,7 +1647,7 @@ if ($fw_sich_mangel) { ?>
    Jede Zelle und jeder Satz ist reiner Text und wird maskiert; nur BS_H_ZEIT und MUSTERPROJEKT tragen
    Auszeichnung wie bisher. Bis 1.0.14 stand hier eine gerechnete Tabelle mit 15 Zeilen. */
 $fw_bl = fw_bausteinliste(); ?>
-<p class="sm-hilfe"><?= fw_e(sprintf(fw_t('LOX.BAUSTEINE_VORTEXT'), fw_t('VORL.Z2MNG_MQTT'))) ?></p>
+<p class="sm-hilfe"><?= fw_e(sprintf(fw_t('LOX.BAUSTEINE_VORTEXT'), fw_t('VORL.Z2M_MQTT'))) ?></p>
 <p class="sm-hilfe"><?= fw_t('LOX.BS_H_ZEIT') ?></p>
 <?php foreach ($fw_bl as $fw_bs) { ?>
 <h4 class="sm-h4"><?= fw_e($fw_bs['kopf']) ?></h4>
@@ -1707,6 +1841,9 @@ $fw_bl = fw_bausteinliste(); ?>
     <input data-role="none" type="hidden" name="activetab" value="tab-test">
     <input data-role="none" type="hidden" name="fmt" value="<?= fw_e($fw_merkmal) ?>">
     <button data-role="none" class="sm-btn sm-b-aktion" type="submit" name="ansage_test" value="1"><?= fw_e(fw_t('DURCHSAGE.K_TEST')) ?></button>
+<?php /* Welle Mehrfach-Ziele (Sprachmodul 1.2.1): je weiteres Ziel ein Knopf "Testansage an Ziel n (Geraet (Plugin))";
+   ohne weitere Ziele nichts. */
+if (fw_mit_zielen()) { echo ansage_testknoepfe_html(fw_tts($fw_cfg), fw_ansage_k(), array('klasse' => 'sm-btn sm-b-aktion')); } ?>
   </form>
   <form action="index.php" method="post">
     <input data-role="none" type="hidden" name="activetab" value="tab-test">
@@ -1781,6 +1918,14 @@ $fw_bl = fw_bausteinliste(); ?>
 <h3><?= fw_e(fw_t('LOG.H_MITHOERER')) ?></h3>
 <div class="sm-log"><?= fw_e(implode("\n", $fw_mzeilen)) ?></div>
 <?php } ?>
+
+<?php /* Gruppe 44 (1.0.17): Startprotokoll der Befehlsbruecke und Fehlerausgabe des Minutentakts - nur, wenn da. */
+foreach (array('befehle_start.log' => 'G44.H_LOG_BRUECKE', 'cron.err' => 'G44.H_LOG_CRON') as $fw_lf => $fw_lh) {
+    $fw_lz = $fw_p['logdir'] !== '' ? fw_log_ende($fw_p['logdir'] . '/' . $fw_lf, 40) : array();
+    if ($fw_lz) { ?>
+<h3><?= fw_e(fw_t($fw_lh)) ?></h3>
+<div class="sm-log"><?= fw_e(implode("\n", $fw_lz)) ?></div>
+<?php } } ?>
 
 <div class="sm-legende">
 <span><i class="sm-punkt sm-b-aktion"></i> <?= fw_t('LEGENDE.AKTION_LOG') ?></span>

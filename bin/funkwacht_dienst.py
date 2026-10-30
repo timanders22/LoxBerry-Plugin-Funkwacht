@@ -51,6 +51,14 @@ Aufrufe:
     funkwacht_dienst.py --mqtt-leeren eigene behaltene Themen am Broker loeschen
                                       (fuer uninstall/uninstall)
 
+GRUPPE 44 (1.0.17)
+-----------------
+* Neues Lebenszeichen zaehler (0...999, je Durchgang eins weiter, nie
+  retained, fluechtig - nur im Speicher): die Ausfallerkennung in Loxone und
+  das MQTT-Gateway V2 (Noncached) haengen daran. ok und ts bleiben.
+* Befehle ueber MQTT (Befehlsbruecke 1.0.2) legen ihren Auftrag in dieselbe
+  Datei auftraege.json wie der HTTP-Endpunkt - hier aendert sich dafuer nichts.
+
 Kompatibel mit Python 3.9 und 3.11.
 """
 
@@ -623,8 +631,10 @@ def dienst_fehlt_hinweis(g) -> str:
     if rc != 0 or "LoadState=not-found" not in aus:
         return ""
     if e in ("zigbee2mqtt", "zigbee2mqtt.service"):
-        return ("Dienst %s nicht vorhanden - Zigbee2MqttNG? (Dienst zigbee2mqttng, Vorlage "
-                "\"Zigbee2MqttNG ueber MQTT\"); es wird nicht geheilt" % e)
+        # Gruppe 44 (1.0.17, E8): die Vorlage "Zigbee2MQTT oder Zigbee2MqttNG ueber MQTT" setzt den
+        # Dienst zigbee2mqttng selbst, wenn Zigbee2MqttNG installiert ist (bis 1.0.16 eigene NG-Vorlage).
+        return ("Dienst %s nicht vorhanden - Zigbee2MqttNG? (Dienst zigbee2mqttng; die Vorlage "
+                "\"Zigbee2MQTT oder Zigbee2MqttNG ueber MQTT\" erkennt ihn selbst); es wird nicht geheilt" % e)
     return "Dienst %s nicht vorhanden; es wird nicht geheilt" % e
 
 
@@ -933,6 +943,10 @@ def felder(stand: dict) -> list:
     aus.append(("gesperrt", "GESPERRT", int(stand.get("gesperrt", 0))))
     aus.append(("wartung", "WARTUNG", int(stand.get("wartung", 0))))
     aus.append(("ts", "TS", int(stand.get("zeit", 0))))
+    # Gruppe 44 (1.0.17, B1): das Lebenszeichen je Durchgang. Kein HTTP-Feld -
+    # die Antwortzeile des Endpunkts bleibt byte-gleich; der Wert kommt nur ueber
+    # veroeffentlichen() herein (stand.json traegt ihn nicht).
+    aus.append(("zaehler", None, int(stand.get("zaehler", 0))))
     for nr in sorted(ger, key=lambda x: int(x)):
         e = ger[nr]
         v = "geraet%s/" % nr
@@ -1008,7 +1022,7 @@ def felder(stand: dict) -> list:
 RETAIN = {
     "ok": 0, "krank": 0, "geraete": 1, "geheilt_gesamt": 1,
     "versuche_gesamt": 1, "alarm": 0, "gesperrt": 0,
-    "wartung": 0, "ts": 0,
+    "wartung": 0, "ts": 0, "zaehler": 0,
     "geraetN/ok": 0, "geraetN/stufe": 0, "geraetN/alter": 0,
     "geraetN/heilungen": 1, "geraetN/versuche": 1, "geraetN/abgelehnt": 1,
     "geraetN/heil24": 0, "geraetN/heil7t": 0, "geraetN/seit": 0,
@@ -1946,6 +1960,18 @@ def ansagen(meldungen):
                 "ansage_aufruf")
 
 
+# Gruppe 44 (1.0.17, B1): Lebenszeichen 0...999, je Durchgang eins weiter, dann
+# wieder 0. Fluechtig (nur im Speicher): nach einem Neustart beginnt er bei 0 -
+# Loxone sieht ohnehin nur, OB er sich aendert.
+_zaehler = -1
+
+
+def zaehler_weiter() -> int:
+    global _zaehler
+    _zaehler = (_zaehler + 1) % 1000
+    return _zaehler
+
+
 def veroeffentlichen(cfg, stand):
     global _altlast_naechster, _sticks_naechster, _voll_naechster
     # M5: vor dem Schalter - auch "MQTT aus" hinterlaesst ein Praefix.
@@ -1967,7 +1993,7 @@ def veroeffentlichen(cfg, stand):
             # M8: nach dem Abraeumen geht der volle Satz einmal hinaus, sonst
             # stuende ein geleertes Thema bis zu 30 Minuten leer.
             _voll_naechster = 0.0
-    paare = [(m, w) for m, _, w in felder(stand)]
+    paare = [(m, w) for m, _, w in felder(dict(stand, zaehler=max(0, _zaehler)))]
     mqtt_senden(paare, praefix)
     # Themen geleerter Stick-Zeilen abraeumen (1.0.7) - NACH dem Senden: das
     # Nachsehen dauert zweimal die Wartezeit, und die leere Nutzlast der
@@ -2239,6 +2265,19 @@ def dienst_selbsttest():
        thema_stamm("geraet12/stufe"), "geraetN/stufe")
     pr("ein absoluter Zeitstempel ist retained", retain_fuer("geraet1/letzte"), True)
     pr("ein unbekanntes Thema geht als publish", retain_fuer("gibt/es/nicht"), False)
+    # Gruppe 44 (1.0.17, B1)
+    pr("das Lebenszeichen zaehler ist nie retained", retain_fuer("zaehler"), False)
+    pr("zaehler hat kein HTTP-Feld (Antwortzeile unveraendert)",
+       [h for th, h, _w in felder({"geraete": {}}) if th == "zaehler"], [None])
+    pr("zaehler steht in felder() mit dem uebergebenen Wert",
+       [w for th, _h, w in felder({"zaehler": 7, "geraete": {}}) if th == "zaehler"], [7])
+    global _zaehler
+    _alt_z = _zaehler
+    _zaehler = 998
+    pr("zaehler laeuft 998 -> 999 -> 0", [zaehler_weiter(), zaehler_weiter()], [999, 0])
+    _zaehler = -1
+    pr("der erste Durchgang sendet zaehler 0", zaehler_weiter(), 0)
+    _zaehler = _alt_z
 
     zeilen.append("")
     zeilen.append("-- Eigene Themen beim Abraeumen --")
@@ -2390,6 +2429,7 @@ def main():
         hist = historie_lesen()
         auftraege_ausfuehren(hist, cfg, auftraege_holen(), tabu)
         neu = durchlauf(cfg, hist, tabu)
+        zaehler_weiter()
         # U1: eine gescheiterte Schrift wird gesagt, nicht verschwiegen.
         if not json_schreiben(p["historie"], hist):
             log("historie.json liess sich nicht schreiben - Zaehler und Verlauf dieses "

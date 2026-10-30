@@ -52,8 +52,9 @@ if (!function_exists('lb_wurzel_ermitteln')) {
 if (!function_exists('fw_e')) {
     function fw_e($s) { return htmlspecialchars((string) $s, ENT_QUOTES, 'UTF-8'); }
 }
-/* Gemeinsame Sprachausgabe (Abschrift von Werkzeuge/gemeinsam/sprachausgabe.php, Nr. 36 b). Liegt
- * neben dieser Datei; die Datei schuetzt sich selbst gegen doppeltes Laden. */
+/* Gemeinsame Sprachausgabe (Abschrift von Werkzeuge/gemeinsam/sprachausgabe.php, Nr. 36 b; seit 1.0.17 Stamm 1.2.1
+ * mit weiteren Ausgabezielen, fw_mit_zielen(), Welle Mehrfach-Ziele). Liegt neben dieser Datei; die Datei schuetzt
+ * sich selbst gegen doppeltes Laden. */
 require_once __DIR__ . '/sprachausgabe.php';
 function fw_x($s) { return htmlspecialchars((string) $s, ENT_QUOTES | ENT_XML1, 'UTF-8'); }
 
@@ -188,6 +189,11 @@ function fw_vorgaben()
         'takt'         => 60,
         'mqtt_ein'     => 1,
         'mqtt_topic'   => 'funkwacht',
+        /* Gruppe 44 (1.0.17): Befehle ueber die Befehlsbruecke (ab Werk und beim Update aus; UDP 11884 nimmt im
+         * Heimnetz ohne Anmeldung an) und der HTTP-Endpunkt (Neuinstallation aus, beim Update setzt postinstall.sh 1,
+         * wenn der Schluessel fehlt - wer die HTTP-Vorlagen nutzt, aendert nichts). */
+        'befehle_mqtt_ein' => 0,
+        'endpunkt_ein' => 0,
         'aktionstoken' => '',
         'anlauf_s'     => 300,
         'ruhe_von'     => '',
@@ -255,14 +261,24 @@ function fw_warum_nr()
  * gesetzt und muessen dort geprueft werden - der Knopf "Jetzt messen" neben
  * der Zeile beantwortet in einer Sekunde, ob der Pfad stimmt.
  */
-function fw_vorlagen()
+function fw_vorlagen($zb = null)
 {
+    /* Gruppe 44 (1.0.17, E8, Sammelstelle #41): Zigbee2MQTT ODER Zigbee2MqttNG - die Vorlage bestimmt den Dienst
+     * selbst (fw_zigbee_dienst(): Plugin-Datenbank, Gegenprobe systemd). Bis 1.0.16 gab es drei Vorlagen; zwei
+     * nannten fest den alten Dienst zigbee2mqtt, und ein falscher Dienstname fuehrte zu "Dienst nicht vorhanden - es
+     * wird nicht geheilt" (funkwacht_dienst.py, dienst_fehlt_hinweis()). Die Vorlage "Zigbee2MqttNG ueber MQTT"
+     * entfaellt in der Liste; gespeicherte Zeilen bleiben unberuehrt. Die Oberflaeche zeigt, was erkannt wurde.
+     * B10 (30.10.2026, vorher B2): den Pfad der Protokolldatei liest fw_zigbee_logpfad() aus der configuration.yaml
+     * des Dienstes (log_directory, log_file); der alte feste Vorschlag <ordner>/data/log/log.txt stimmte unter
+     * Zigbee2MqttNG nicht. Er gehoert wie jeder Vorlagenpfad mit "Jetzt messen" geprueft. Ein falscher Pfad heilt
+     * nicht: "nie gesehen" sperrt das Heilen (warum nie_gesehen). $zb['yaml'] nur fuer Proben. */
+    $zb = is_array($zb) ? $zb : fw_zigbee_dienst();
     return array(
         'z2m_paket' => array(
             'text' => 'VORL.Z2M_PAKET',
             'werte' => array('art' => 'datei',
-                             'pfad' => '/opt/zigbee2mqtt/data/log/log.txt',
-                             'wachstum' => 1, 'dienst' => 'zigbee2mqtt',
+                             'pfad' => fw_zigbee_logpfad($zb['ordner'], isset($zb['yaml']) ? $zb['yaml'] : null),
+                             'wachstum' => 1, 'dienst' => $zb['dienst'],
                              'hoechstalter' => 900, 'hoechststufe' => 2),
         ),
         'z2m_mqtt' => array(
@@ -271,26 +287,15 @@ function fw_vorlagen()
              * nur bei einer Aenderung - als Lebenszeichen taugt es nicht.
              * bridge/health sendet Zigbee2MQTT 2.x im Takt von health.interval
              * (Vorgabe 10 Minuten, am Geraet gemessen); 1500 s lassen zwei
-             * Takte Luft.
-             * S3 (Pruefung 29.09.2026): kein zweites Kriterium. Bis Stufe 1
-             * stand hier art2 'usb' mit leerem pfad2 - eine Zeile, die das
-             * Formular beanstandet und die das Zurueckspielen abweist. */
-            /* c1 (Entscheidung 16, Welle 4): zunaechst NUR MELDEN - Heilen
+             * Takte Luft. Zigbee2MqttNG sendet unter denselben Themen
+             * (Koordinator 08.10.2026, z2mng_hausstandard F-1).
+             * S3 (Pruefung 29.09.2026): kein zweites Kriterium.
+             * c1 (Entscheidung 16, Welle 4): zunaechst NUR MELDEN - Heilen
              * ab Werk aus. Eingeschaltet wird es nach einer Woche
              * Beobachtung von Hand; der Dienst steht schon da. */
             'werte' => array('art' => 'mqtt', 'thema' => 'zigbee2mqtt/bridge/health',
                              'art2' => '', 'pfad2' => '', 'verkn' => 'oder',
-                             'dienst' => 'zigbee2mqtt', 'heilen' => 0,
-                             'hoechstalter' => 1500, 'hoechststufe' => 2),
-        ),
-        /* Koordinator 08.10.2026 (z2mng_hausstandard F-1): Zigbee2MqttNG laeuft als Dienst zigbee2mqttng
-         * und sendet unter denselben Themen; der alte Dienst zigbee2mqtt ist dort entfernt. Wie z2m_mqtt
-         * zunaechst NUR MELDEN. */
-        'z2mng_mqtt' => array(
-            'text' => 'VORL.Z2MNG_MQTT',
-            'werte' => array('art' => 'mqtt', 'thema' => 'zigbee2mqtt/bridge/health',
-                             'art2' => '', 'pfad2' => '', 'verkn' => 'oder',
-                             'dienst' => 'zigbee2mqttng', 'heilen' => 0,
+                             'dienst' => $zb['dienst'], 'heilen' => 0,
                              'hoechstalter' => 1500, 'hoechststufe' => 2),
         ),
         'z2m_docker' => array(
@@ -473,7 +478,7 @@ function fw_config($erzeugen = true)
     $cfg['anlauf_s']     = max(0, min(3600, (int) $cfg['anlauf_s']));
     $cfg['log_kb']       = max(16, min(20000, (int) $cfg['log_kb']));
     $cfg['verlauf_tage'] = max(1, min(730, (int) $cfg['verlauf_tage']));
-    foreach (array('mqtt_ein', 'global_aus', 'melden_aktiv', 'signal_ein', 'ansage_gestoert', 'ansage_wieder') as $k) {
+    foreach (array('mqtt_ein', 'global_aus', 'melden_aktiv', 'signal_ein', 'ansage_gestoert', 'ansage_wieder', 'befehle_mqtt_ein', 'endpunkt_ein') as $k) {
         $cfg[$k] = empty($cfg[$k]) ? 0 : 1;
     }
     foreach (array('ruhe_von', 'ruhe_bis') as $k) {
@@ -988,6 +993,8 @@ function fw_mqtt_themen()
         'gesperrt'            => 'FW_MQTT.GESPERRT',
         'wartung'             => 'FW_MQTT.WARTUNG',
         'ts'                  => 'FW_MQTT.TS',
+        /* Gruppe 44 (1.0.17, B1): Lebenszeichen 0...999 je Durchgang, nie retained (Gateway V2: Noncached). */
+        'zaehler'             => 'FW_MQTT.ZAEHLER',
         'geraetN/ok'          => 'FW_MQTT.G_OK',
         'geraetN/stufe'       => 'FW_MQTT.G_STUFE',
         'geraetN/alter'       => 'FW_MQTT.G_ALTER',
@@ -1029,7 +1036,7 @@ function fw_mqtt_retain()
          * Sticks und sich selbst (Begruendung an RETAIN im Waechter). */
         'ok' => 0, 'krank' => 0, 'geraete' => 1, 'geheilt_gesamt' => 1,
         'versuche_gesamt' => 1, 'alarm' => 0, 'gesperrt' => 0,
-        'wartung' => 0, 'ts' => 0,
+        'wartung' => 0, 'ts' => 0, 'zaehler' => 0,
         'geraetN/ok' => 0, 'geraetN/stufe' => 0, 'geraetN/alter' => 0,
         'geraetN/heilungen' => 1, 'geraetN/versuche' => 1, 'geraetN/abgelehnt' => 1,
         'geraetN/heil24' => 0, 'geraetN/heil7t' => 0, 'geraetN/seit' => 0,
@@ -1960,7 +1967,7 @@ function fw_einstellung_pruefen($k, $w)
         list(, $grund) = fw_ganzzahl_pruefen($w, $von, $bis);
         return $grund === '' ? array() : array(fw_sich_zahlgrund($wo, $grund, $von, $bis));
     }
-    if (in_array($k, array('mqtt_ein', 'global_aus', 'melden_aktiv', 'signal_ein', 'ansage_gestoert', 'ansage_wieder'), true)) {
+    if (in_array($k, array('mqtt_ein', 'global_aus', 'melden_aktiv', 'signal_ein', 'ansage_gestoert', 'ansage_wieder', 'befehle_mqtt_ein', 'endpunkt_ein'), true)) {
         return in_array($w, array(0, 1, true, false), true)
             ? array() : array(sprintf(fw_t('SICH.W_HAKEN'), $wo));
     }
@@ -2145,7 +2152,9 @@ function fw_sicherung_pruefen($d)
     foreach (array_keys($vorgaben) as $k) {
         /* Nr. 36 b: eine Sicherung von vor 1.0.11 kennt die Ansage nicht - die geltenden Werte bleiben
          * (fw_sicherung_lesen() sagt es). */
-        if (!array_key_exists($k, $d) && in_array($k, fw_ansage_schluessel(), true)) { continue; }
+        /* Gruppe 44 (1.0.17): ebenso befehle_mqtt_ein und endpunkt_ein (Sicherung von vor 1.0.17). */
+        if (!array_key_exists($k, $d) && in_array($k, array_merge(fw_ansage_schluessel(),
+                array('befehle_mqtt_ein', 'endpunkt_ein')), true)) { continue; }
         if (!array_key_exists($k, $d)) { $fehlt[] = $k; }
     }
     if ($fehlt) {
@@ -2210,7 +2219,7 @@ function fw_sicherung_lesen($roh)
     $fw_jetzt = fw_config(false);
     $fw_behalten = array();
     foreach (array_keys($vorgaben) as $k) {
-        if (!array_key_exists($k, $d)) {      // nur die Ansage (fw_sicherung_pruefen())
+        if (!array_key_exists($k, $d)) {      // nur die Ansage und die Haken von 1.0.17 (fw_sicherung_pruefen())
             $neu[$k] = $fw_jetzt[$k];
             $fw_behalten[] = $k;
             continue;
@@ -2218,10 +2227,22 @@ function fw_sicherung_lesen($roh)
         $neu[$k] = $d[$k];
     }
     /* Nr. 36 b: der Block tts vervollstaendigt, die geltenden Sprechtoken behalten. */
+    $fw_spaet = array();     // Welle Mehrfach-Ziele (1.0.17): Spaetliste - fehlte in der Sicherung, gilt weiter
     if (!in_array('tts', $fw_behalten, true)) {
+        /* Welle Mehrfach-Ziele (1.0.17): "... + $fw_tj" behielt die geltenden weiteren Ziele einer Sicherung ohne
+         * Liste schon bisher - still. Jetzt geht der Block vorher durch die Spaetliste, und die Meldung nennt sie. */
+        /* Welle Mehrfach-Ziele (Sprachmodul 1.2.1, Spaetliste): fehlt die Liste der weiteren Ziele in der Sicherung (Datei einer
+         * aelteren Fassung), gelten die jetzigen weiteren Ziele weiter - genannt im Hinweis. Eine Sicherung MIT leerer Liste
+         * heisst "keine weiteren Ziele" und wird so uebernommen. */
+        $fw_spaete = array();
+        if (is_array($neu['tts']) && function_exists('ansage_sicherung_spaet')) {
+            list($neu['tts'], $fw_spaete) = ansage_sicherung_spaet($neu['tts'],
+                (isset($fw_jetzt['tts']) && is_array($fw_jetzt['tts'])) ? $fw_jetzt['tts'] : null);
+        }
+        foreach ($fw_spaete as $fw_sn) { $fw_spaet[] = $fw_sn; }     // Welle Mehrfach-Ziele: tts.ziele (Spaetliste)
         $fw_tj = fw_tts($fw_jetzt);
         $fw_tg = '';
-        list($fw_tv) = ansage_vervollstaendigen(ansage_wert_pruefen($d['tts'], $fw_tg, fw_ansage_modi()) + $fw_tj);
+        list($fw_tv) = ansage_vervollstaendigen(ansage_wert_pruefen($neu['tts'], $fw_tg, fw_ansage_modi()) + $fw_tj);
         $neu['tts'] = ansage_sicherung_tokens_behalten($fw_tv, $fw_tj);
     }
     $anzahl = 0;
@@ -2231,7 +2252,7 @@ function fw_sicherung_lesen($roh)
     }
     foreach (array_keys(fw_betrieb_zahlen()) as $k) { $neu[$k] = (int) $neu[$k]; }
     $neu['zeilen'] = (int) $neu['zeilen'];
-    foreach (array('mqtt_ein', 'global_aus', 'melden_aktiv', 'signal_ein', 'ansage_gestoert', 'ansage_wieder') as $k) {
+    foreach (array('mqtt_ein', 'global_aus', 'melden_aktiv', 'signal_ein', 'ansage_gestoert', 'ansage_wieder', 'befehle_mqtt_ein', 'endpunkt_ein') as $k) {
         $neu[$k] = $neu[$k] ? 1 : 0;
     }
     $neu['broker_port'] = (string) $neu['broker_port'];
@@ -2240,7 +2261,8 @@ function fw_sicherung_lesen($roh)
     }
     fw_log('Einstellungen aus einer Sicherung zurueckgespielt.');
     return array(1, sprintf(fw_t('SICH.OK'), $anzahl)
-                    . ($fw_behalten ? ' ' . sprintf(fw_t('DURCHSAGE.SICH_BEHALTEN'), implode(', ', $fw_behalten)) : ''),
+                    . ($fw_behalten ? ' ' . sprintf(fw_t('DURCHSAGE.SICH_BEHALTEN'), implode(', ', $fw_behalten)) : '')
+                    . ($fw_spaet ? ' ' . sprintf(fw_t('EINST.SICH_SPAET'), implode(', ', $fw_spaet)) : ''),
                  array());
 }
 
@@ -2258,10 +2280,53 @@ function fw_sicherung_lesen($roh)
  */
 if (!defined('FW_ANSAGE_SPERRE_S')) { define('FW_ANSAGE_SPERRE_S', 1800); }
 
-/** Erlaubte Ausgabearten: alle des Moduls ausser 'audioserver' (kein Antwortweg zu Loxone im Waechter). */
+/** Erlaubte Ausgabearten: alle des Moduls ausser 'audioserver' (kein Antwortweg zu Loxone im Waechter). Weitere
+ *  Ausgabeziele (Tabelle, 'ziele') seit 1.0.17 mit Stamm 1.2.1 - fw_mit_zielen() unten; ohne Tabelle wie bisher. */
 function fw_ansage_modi()
 {
-    return array('aus', 'musicserver', 'ms4h', 'custom', 'alexang', 'cc4lox');
+    /* Gruppe 44 (1.0.17, Sprachmodul 1.2.1, E7): aus ansage_modi() abgeleitet statt abgeschrieben - damit kommen
+     * sonos4lox und (ab Modul 1.1.4) sonox dazu. audioserver bleibt draussen (kein Antwortweg zu Loxone im
+     * Waechter). Bis 1.0.16 stand hier eine feste Liste ohne Sonos. */
+    $m = function_exists('ansage_modi') ? ansage_modi()
+        : array('aus', 'musicserver', 'ms4h', 'custom', 'alexang', 'cc4lox');
+    $aus = array();
+    foreach ($m as $x) {
+        if ($x === 'audioserver') {
+            continue;
+        }
+        if ($x === 'sonox' && (!defined('ANSAGE_FASSUNG') || version_compare(ANSAGE_FASSUNG, '1.1.4', '<'))) {
+            continue;
+        }
+        $aus[] = $x;
+    }
+    return $aus;
+}
+
+/** Welle Mehrfach-Ziele (Sprachmodul 1.2.1): bietet diese Linie die Tabelle der weiteren Ausgabeziele an? Nur, wenn die
+ *  geladene Abschrift sie kann - laden zwei Abschriften im selben Prozess, gilt die zuerst geladene. */
+function fw_mit_zielen() {
+    return version_compare(ANSAGE_FASSUNG, '1.2.0', '>=') && function_exists('ansage_ziele_html')
+        && function_exists('ansage_ziele_pruefen') && function_exists('ansage_testknoepfe_html');
+}
+
+/** Welle Mehrfach-Ziele (1.0.17), X-2: aus den gesammelten Eingaben (fw_eingaben_sammeln(), Schluessel name[N]; Texte
+ *  in 'werte', Haken in 'haken') wieder das POST der Tabelle (ziele_post); null, wenn die Tabelle nicht darin steht
+ *  (die gespeicherten Ziele bleiben sichtbar). Ein Haken ohne Hakenzeichen fehlt wie im POST. */
+function fw_ziele_x2_post(array $e)
+{
+    $p = array();
+    foreach (array('werte', 'haken') as $art) {
+        if (!isset($e[$art]) || !is_array($e[$art])) { continue; }
+        foreach ($e[$art] as $k => $v) {
+            if (!preg_match('/^(tts_ziel_[a-z]+)\[([2-9])\]\z/', (string) $k, $m)) { continue; }
+            if ($art === 'haken') {
+                if ($v) { $p[$m[1]][(int) $m[2]] = '1'; }
+            } elseif (is_string($v)) {
+                $p[$m[1]][(int) $m[2]] = $v;
+            }
+        }
+    }
+    return isset($p['tts_ziel_art']) ? $p : null;
 }
 
 /** Die Anlaesse: Kennung => Konfigurationsschluessel. */
@@ -2300,6 +2365,10 @@ function fw_ansage_k()
         'kopf'   => array('User-Agent: LoxBerry Funkwacht'),
         'ordner' => ($p['datadir'] !== '' && @is_dir($p['datadir'])) ? $p['datadir'] : '',
         't'      => function ($s) { return fw_t($s); },
+        /* Gruppe 44 (1.0.17, Modul 1.2.1): hoechstens 20 s je Ansage, in JEDEM Weg (auch mit einem Ziel). Der
+         * Waechter wartet auf bin/fw_ansage.php 30 s (funkwacht_dienst.py, ansagen()); der Knopf im Reiter Test
+         * ist eine Webanfrage - 20 s passen in beide. */
+        'frist'  => 20,
         /* K_TTS_EINTRAG: den Satz bringt das Modul seit 1.1.2 selbst mit; die Umlenkung auf
          * DURCHSAGE.SICH_EINTRAG ist seit 1.0.13 gestrichen (X-10). Ab Werk aus - kein 'werk'. */
     );
@@ -2448,4 +2517,759 @@ function fw_t($schluessel)
     }
     $teile = array_pad(explode('.', $schluessel, 2), 2, '');
     return isset($texte[$teile[0]][$teile[1]]) ? $texte[$teile[0]][$teile[1]] : $schluessel;
+}
+
+/* ==================================================================
+ * Gruppe 44 (1.0.17): Hausform - Gateway V2, Befehlsbruecke 1.0.2,
+ * endpunkt_ein, Zigbee-Vorlage erkennt den Dienst (E8), Healthcheck.
+ * Bauvorschrift Pruefung-Durchgang-2026-09-29/wz_bild/GRUPPE44_BAUVORSCHRIFT.md,
+ * Vorlage Weissware Cloud 0.9.44 (ww_v2_*, ww_befehl_annehmen(),
+ * ww_bruecke_*, ww_gesund_*) und BYD Autos 0.9.29.
+ * ================================================================== */
+
+/**
+ * Ueberwacht diese Anlage etwas? Mindestens eine Zeile mit Namen, die eingeschaltet ist. Ohne sie misst der
+ * Waechter nichts - "noch nicht eingerichtet" (Gateway V2, Healthcheck).
+ */
+function fw_eingerichtet($cfg = null)
+{
+    if (!is_array($cfg)) {
+        $cfg = fw_config(false);
+    }
+    foreach ((isset($cfg['geraete']) && is_array($cfg['geraete']) ? $cfg['geraete'] : array()) as $g) {
+        if (is_array($g) && trim((string) (isset($g['name']) ? $g['name'] : '')) !== '' && !empty($g['aktiv'])) {
+            return true;
+        }
+    }
+    return false;
+}
+
+/* ---------------- E8: Zigbee2MQTT oder Zigbee2MqttNG? ---------------- */
+
+/**
+ * Welchen Zigbee-Dienst gibt es hier? Rueckgabe array('dienst' => 'zigbee2mqttng'|'zigbee2mqtt', 'ordner' =>
+ * '/opt/zigbee2mqttng'|'/opt/zigbee2mqtt', 'db' => true|false|null, 'systemd' => 'loaded'|'not-found'|...|'').
+ * Zigbee2MqttNG gilt als installiert, wenn die Plugin-Datenbank (data/system/plugindatabase.json) einen Eintrag mit
+ * dem Ordner zigbee2mqttng fuehrt ODER systemd die Einheit zigbee2mqttng.service kennt (LoadState loaded; Gegenprobe).
+ * Sonst der Dienst des Originals, zigbee2mqtt. Liest nur. $db und $systemd nur fuer Proben (sonst gelesen).
+ */
+function fw_zigbee_dienst($db = null, $systemd = null)
+{
+    if ($db === null) {
+        $p = fw_paths();
+        $f = $p['home'] !== '' ? $p['home'] . '/data/system/plugindatabase.json' : '';
+        $d = ($f !== '' && is_file($f)) ? json_decode((string) @file_get_contents($f), true) : null;
+        if (is_array($d)) {
+            $db = false;
+            $liste = (isset($d['plugins']) && is_array($d['plugins'])) ? $d['plugins'] : $d;
+            foreach ($liste as $e) {
+                if (is_array($e) && isset($e['folder']) && (string) $e['folder'] === 'zigbee2mqttng') {
+                    $db = true;
+                    break;
+                }
+            }
+        }
+    }
+    if ($systemd === null) {
+        $systemd = '';
+        if (function_exists('exec') && (is_file('/bin/systemctl') || is_file('/usr/bin/systemctl'))) {
+            $aus = array();
+            $rc = 1;
+            @exec('systemctl show -p LoadState --value zigbee2mqttng.service 2>/dev/null', $aus, $rc);
+            $systemd = ((int) $rc === 0 && isset($aus[0]) && preg_match('/^[a-z-]{1,20}$/', trim($aus[0])))
+                ? trim($aus[0]) : '';
+        }
+    }
+    $ng = ($db === true) || ($systemd === 'loaded');
+    return array('dienst' => $ng ? 'zigbee2mqttng' : 'zigbee2mqtt',
+                 'ordner' => $ng ? '/opt/zigbee2mqttng' : '/opt/zigbee2mqtt',
+                 'db' => $db, 'systemd' => (string) $systemd);
+}
+
+/**
+ * B10 (30.10.2026): Pfad der Protokolldatei fuer die Vorlage "Zigbee2MQTT oder Zigbee2MqttNG als Paket" - aus der
+ * configuration.yaml des Dienstes (<ordner>/data/configuration.yaml, advanced.log_directory und advanced.log_file).
+ * Am Geraet gemessen (30.10.2026): Zigbee2MqttNG traegt log_directory: log und log_file: zigbee2mqtt.log, der Dienst
+ * laeuft mit WorkingDirectory <ordner>, und <ordner>/log verweist auf den Logordner des Plugins. Den bisherigen
+ * Vorschlag <ordner>/data/log/log.txt gab es dort nicht ("nie gesehen", es haette nie geheilt).
+ * Regeln: ein relativer log_directory gilt gegen <ordner>; enthaelt er %TIMESTAMP%, gilt das JUENGSTE passende
+ * Verzeichnis (so legt Zigbee2MQTT je Start eines an; Vorgabe data/log/%TIMESTAMP%), ebenso fuer log_file (Vorgabe
+ * log.log). Ohne lesbare yaml bleibt der bisherige Vorschlag. Der Waechter misst einen festen Pfad - ein Verzeichnis
+ * mit Zeitstempel wechselt bei jedem Neustart, dann die Vorlage neu setzen (Hinweis G44.Z_HINWEIS).
+ * Liest nur. $yaml nur fuer Proben (Text der Datei; sonst gelesen).
+ */
+function fw_zigbee_logpfad($ordner, $yaml = null)
+{
+    $ordner = rtrim((string) $ordner, '/');
+    $alt = $ordner . '/data/log/log.txt';
+    if ($yaml === null) {
+        $f = $ordner . '/data/configuration.yaml';
+        $yaml = (is_file($f) && is_readable($f)) ? (string) @file_get_contents($f) : '';
+    }
+    if ((string) $yaml === '') {
+        return $alt;
+    }
+    $werte = array('log_directory' => '', 'log_file' => '');
+    $im_advanced = false;
+    foreach (preg_split('/\r?\n/', (string) $yaml) as $z) {
+        if (preg_match('/^\s*(#|$)/', $z)) {
+            continue;
+        }
+        if (preg_match('/^\S/', $z)) {
+            $im_advanced = (bool) preg_match('/^advanced:\s*(#.*)?$/', $z);
+            continue;
+        }
+        if ($im_advanced && preg_match('/^\s+(log_directory|log_file):\s*(.*)$/', $z, $m)) {
+            $v = trim((string) preg_replace('/\s+#.*$/', '', $m[2]));
+            if (strlen($v) >= 2 && ($v[0] === '"' || $v[0] === "'") && substr($v, -1) === $v[0]) {
+                $v = substr($v, 1, -1);
+            }
+            $werte[$m[1]] = $v;
+        }
+    }
+    $verz = $werte['log_directory'] !== '' ? $werte['log_directory'] : 'data/log/%TIMESTAMP%';
+    $datei = $werte['log_file'] !== '' ? $werte['log_file'] : 'log.log';
+    if ($verz[0] !== '/') {
+        $verz = $ordner . '/' . $verz;
+    }
+    $verz = rtrim($verz, '/');
+    if (strpos($verz, '%TIMESTAMP%') !== false) {
+        $j = fw_zigbee_juengstes($verz, true);
+        if ($j === '') {
+            return $verz . '/' . $datei;
+        }
+        $verz = $j;
+    }
+    $pfad = $verz . '/' . $datei;
+    if (strpos($datei, '%TIMESTAMP%') !== false) {
+        $j = fw_zigbee_juengstes($pfad, false);
+        if ($j !== '') {
+            $pfad = $j;
+        }
+    }
+    return $pfad;
+}
+
+/** Juengstes Verzeichnis ($verz) bzw. juengste Datei zum Muster mit %TIMESTAMP% - '' wenn keins. Liest nur. */
+function fw_zigbee_juengstes($muster, $verz)
+{
+    $treffer = @glob(str_replace('%TIMESTAMP%', '*', $muster));
+    $best = '';
+    $best_t = -1;
+    foreach (is_array($treffer) ? $treffer : array() as $t) {
+        if ($verz ? !is_dir($t) : !is_file($t)) {
+            continue;
+        }
+        $m = (int) @filemtime($t);
+        if ($m > $best_t || ($m === $best_t && strcmp($t, $best) > 0)) {
+            $best = $t;
+            $best_t = $m;
+        }
+    }
+    return $best;
+}
+
+/** Der Satz "erkannt: ..." unter der Vorlagentabelle (rein). */
+function fw_zigbee_text(array $z)
+{
+    $db = $z['db'] === true ? fw_t('ALLG.JA') : ($z['db'] === false ? fw_t('ALLG.NEIN') : fw_t('G44.Z_UNLESBAR'));
+    $sd = $z['systemd'] !== '' ? $z['systemd'] : fw_t('G44.Z_UNLESBAR');
+    return sprintf(fw_t('G44.Z_ERKANNT'), $z['dienst'], $db, $sd);
+}
+
+/* ---------------- G1: MQTT-Gateway V2 ---------------- */
+
+/** Der Name, den das MQTT-Gateway vergibt: '/', '%' und Leerzeichen werden '_' (Regeln/07 :69). Rein. */
+function fw_gateway_name($thema)
+{
+    return str_replace(array('/', '%', ' '), '_', (string) $thema);
+}
+
+/**
+ * Die Retain-Tabelle des Waechters (RETAIN in bin/funkwacht_dienst.py) - die Tabelle, NACH DER er sendet - als
+ * Stamm => bool. Gelesen aus der Datei (kein Python-Aufruf: der Healthcheck soll schnell und ohne Kindprozess
+ * bleiben). null = nicht lesbar.
+ */
+function fw_py_retain()
+{
+    $p = fw_paths();
+    $kand = array();
+    if ($p['bindir'] !== '') {
+        $kand[] = $p['bindir'] . '/funkwacht_dienst.py';
+    }
+    if (fw_archivlage()) {
+        $kand[] = dirname(dirname(__DIR__)) . '/bin/funkwacht_dienst.py';
+    }
+    foreach ($kand as $datei) {
+        if (!is_file($datei)) {
+            continue;
+        }
+        $q = (string) @file_get_contents($datei);
+        $a = strpos($q, "\nRETAIN = {");
+        $e = $a === false ? false : strpos($q, "\n}", $a);
+        if ($e === false) {
+            return null;
+        }
+        $aus = array();
+        if (preg_match_all('/"([^"]+)"\s*:\s*([01])\b/', substr($q, $a, $e - $a), $m, PREG_SET_ORDER)) {
+            foreach ($m as $t) {
+                $aus[$t[1]] = ($t[2] === '1');
+            }
+        }
+        return $aus ? $aus : null;
+    }
+    return null;
+}
+
+/** Die Sticknummern fuer die Hakenliste: die belegten Zeilen; ohne Zeile Stick 1 (Beispiel). */
+function fw_v2_sticknummern($cfg = null)
+{
+    if (!is_array($cfg)) {
+        $cfg = fw_config(false);
+    }
+    $n = array();
+    $i = 0;
+    foreach ((isset($cfg['geraete']) && is_array($cfg['geraete']) ? $cfg['geraete'] : array()) as $g) {
+        $i++;
+        if (is_array($g) && trim((string) (isset($g['name']) ? $g['name'] : '')) !== '') {
+            $n[] = $i;
+        }
+    }
+    return $n ? $n : array(1);
+}
+
+/** Textthemen und Zeitstempel: nicht in der Hakenliste (das Musterprojekt hat keinen Texteingang; ts wechselt je Lauf). */
+function fw_v2_ohne()
+{
+    return array('ts', 'geraetN/name', 'geraetN/grund', 'geraetN/warum', 'geraetN/letzte_tat', 'geraetN/bemerkung');
+}
+
+/**
+ * Namenstabelle und V2-Hakenliste - EINE Quelle fuer Reiter MQTT, Reiter Test, Healthcheck und Messskript (G1).
+ * Die Themen kommen aus RETAIN in bin/funkwacht_dienst.py (fw_py_retain()) - keine zweite Liste. Noncached genau:
+ * ok, zaehler, geraetN/ok und status/befehle (Lebenszeichen der Bruecke). Rueckgabe Liste von array(thema, name,
+ * noncached, bez); leer -> "nicht feststellbar". $themen und $nummern nur fuer Proben.
+ */
+function fw_v2_haken($cfg = null, $themen = null, $nummern = null)
+{
+    if (!is_array($cfg)) {
+        $cfg = fw_config(false);
+    }
+    $pf = trim((string) (isset($cfg['mqtt_topic']) ? $cfg['mqtt_topic'] : ''), '/ ');
+    if ($pf === '') {
+        $pf = 'funkwacht';
+    }
+    if ($themen === null) {
+        $py = fw_py_retain();
+        $themen = is_array($py) ? array_keys($py) : array();
+    }
+    if (!$themen) {
+        return array();
+    }
+    $bez = fw_mqtt_themen();
+    $ohne = fw_v2_ohne();
+    $aus = array();
+    $je = array();
+    foreach ($themen as $th) {
+        $th = (string) $th;
+        if (in_array($th, $ohne, true)) {
+            continue;
+        }
+        if (strpos($th, 'geraetN/') === 0) {
+            $je[] = $th;
+            continue;
+        }
+        $t = $pf . '/' . $th;
+        $aus[] = array('thema' => $t, 'name' => fw_gateway_name($t),
+                       'noncached' => in_array($th, array('ok', 'zaehler'), true),
+                       'bez' => isset($bez[$th]) ? (string) $bez[$th] : '');
+    }
+    if (!$je) {
+        return array();
+    }
+    foreach (($nummern === null ? fw_v2_sticknummern($cfg) : $nummern) as $nr) {
+        foreach ($je as $th) {
+            $t = $pf . '/geraet' . (int) $nr . '/' . substr($th, strlen('geraetN/'));
+            $aus[] = array('thema' => $t, 'name' => fw_gateway_name($t), 'noncached' => $th === 'geraetN/ok',
+                           'bez' => isset($bez[$th]) ? (string) $bez[$th] : '');
+        }
+    }
+    $t = $pf . '/status/befehle';
+    $aus[] = array('thema' => $t, 'name' => fw_gateway_name($t), 'noncached' => true, 'bez' => 'BEFEHL.STATUS_BEFEHLE');
+    return $aus;
+}
+
+/** Die angehakten Datenpunkte aus subscriptions.json (rein): Id => noncached. null = unlesbar. Abschrift ww_v2_abos(). */
+function fw_v2_abos($daten)
+{
+    if (!is_array($daten)) {
+        return null;
+    }
+    $liste = array();
+    foreach (array('Subscriptions', 'subscriptions') as $s) {
+        if (isset($daten[$s]) && is_array($daten[$s])) {
+            $liste = $daten[$s];
+            break;
+        }
+    }
+    $abo = array();
+    foreach ($liste as $e) {
+        if (!is_array($e)) {
+            continue;
+        }
+        $id = '';
+        foreach (array('Id', 'id', 'Topic', 'topic') as $k) {
+            if (isset($e[$k]) && is_string($e[$k])) {
+                $id = $e[$k];
+                break;
+            }
+        }
+        if ($id === '') {
+            continue;
+        }
+        $nc = false;
+        foreach (array('Noncached', 'noncached') as $k) {
+            if (isset($e[$k])) {
+                $nc = ($e[$k] === true || in_array(strtolower(trim((string) $e[$k])), array('1', 'true', 'yes', 'on'), true));
+            }
+        }
+        $abo[$id] = $nc;
+    }
+    return $abo;
+}
+
+/** Soll gegen Ist (rein): array(1|0, fehlt[], noncached_falsch[], da, soll). Abschrift ww_v2_haken_abgleich(). */
+function fw_v2_haken_abgleich(array $soll, array $abo)
+{
+    $fehlt = array();
+    $nc = array();
+    $da = 0;
+    foreach ($soll as $e) {
+        if (!array_key_exists($e['thema'], $abo)) {
+            $fehlt[] = $e['name'];
+            continue;
+        }
+        $da++;
+        if ((bool) $abo[$e['thema']] !== (bool) $e['noncached']) {
+            $nc[] = $e['name'] . ($e['noncached'] ? ' (Noncached fehlt)' : ' (Noncached zu viel)');
+        }
+    }
+    return array(($fehlt || $nc) ? 0 : 1, $fehlt, $nc, $da, count($soll));
+}
+
+/**
+ * Pruefzeile "Gateway V2: alle Datenpunkte angehakt?" (einheitliche Pruefzeile, Nachtwelle 29.10.):
+ * array(1|0|2, Text) - 2 = grau (nicht feststellbar, Gateway V1, noch nicht eingerichtet). Liest nur.
+ * Die Argumente nach $cfg nur fuer Proben; sonst aus funkwacht_dienst.py, general.json und subscriptions.json.
+ */
+function fw_v2_haken_lage($cfg = null, $soll = null, $abo = false, $fassung = null, $eingerichtet = null)
+{
+    if (!is_array($cfg)) {
+        $cfg = fw_config(false);
+    }
+    if ($fassung === null) {
+        $m = fw_mqtt_zustand();
+        $fassung = !empty($m['gefunden']) ? (int) $m['fassung'] : 0;
+    }
+    if ((int) $fassung <= 0) {
+        return array(2, fw_t('PRUEF.V2_UNKLAR'));
+    }
+    if ((int) $fassung < 2) {
+        return array(2, fw_t('PRUEF.V2_V1'));
+    }
+    if ($soll === null) {
+        $soll = fw_v2_haken($cfg);
+    }
+    if (!$soll) {
+        return array(2, fw_t('PRUEF.V2_LEER'));
+    }
+    if ($eingerichtet === null) {
+        $eingerichtet = fw_eingerichtet($cfg);
+    }
+    if (!$eingerichtet) {
+        return array(2, fw_t('PRUEF.V2_NICHT_EINGERICHTET'));
+    }
+    if ($abo === false) {
+        $p = fw_paths();
+        $f = $p['home'] !== '' ? $p['home'] . '/config/system/subscriptions.json' : '';
+        $abo = ($f !== '' && is_file($f)) ? fw_v2_abos(json_decode((string) @file_get_contents($f), true)) : null;
+    }
+    if ($abo === null) {
+        return array(2, fw_t('PRUEF.V2_UNKLAR'));
+    }
+    list($ok, $fehlt, $nc, $da, $zahl) = fw_v2_haken_abgleich($soll, $abo);
+    $txt = sprintf(fw_t('PRUEF.V2_ZAHL'), $da, $zahl);
+    if ($fehlt) {
+        $txt .= ' ' . sprintf(fw_t('PRUEF.V2_FEHLT'), implode(', ', array_slice($fehlt, 0, 12))
+            . (count($fehlt) > 12 ? ' ...' : ''));
+    }
+    if ($nc) {
+        $txt .= ' ' . sprintf(fw_t('PRUEF.V2_NC'), implode(', ', $nc));
+    }
+    return array($ok, $txt);
+}
+
+/* ---------------- G2: eine Annahmefunktion fuer HTTP und MQTT ---------------- */
+
+/** Die schaltenden Aktionen des Endpunkts (quittieren, wartung). */
+function fw_schaltende()
+{
+    return array('quittieren', 'wartung');
+}
+
+/**
+ * quittieren bzw. wartung annehmen - DIESELBE Funktion fuer den HTTP-Endpunkt und die Befehlsbruecke (Regeln/07
+ * Abschnitt 3a). Pruefungen und Antworten wie der Endpunkt bis 1.0.16 (dort inline; Probe P-G2-5 byte-gleich):
+ *   quittieren: nr fehlt = 0 (alle); nr kein 0-99 -> 400 NR; Stick nicht im Stand -> 404 GERAET_UNBEKANNT;
+ *               Auftrag nicht schreibbar -> 500 SCHREIBEN; sonst QUITTIERT;OK=1;NR=<n>;WIRKT_IN=<takt>.
+ *   wartung:    dauer fehlt = 60; keine ganze Zahl 0-1440 -> 400 DAUER; dieselbe Dauer binnen 60 s (X-7) ->
+ *               UNVERAENDERT=1 ohne Auftrag; Merker nicht fuehrbar -> 503 BREMSE_MERKER; Auftrag nicht schreibbar ->
+ *               500 SCHREIBEN; sonst WARTUNG;OK=1;DAUER=<min>;WIRKT_IN=<takt>.
+ * Beide Wege legen den Auftrag in dieselbe Datei (auftraege.json); der Waechter fuehrt ihn im naechsten Durchlauf
+ * aus. MQTT wartet nie (Quittung "uebergeben"). $param: 'nr' bzw. 'dauer' als Rohwert, null = nicht angegeben.
+ * Rueckgabe array('ok' => 0|1, 'grund', 'http', 'zeilen' => Zeilen der Endpunktantwort, 'art' =>
+ * abgewiesen|gesetzt|unveraendert).
+ */
+function fw_befehl_annehmen($aktion, array $param, $quelle)
+{
+    $wo = $quelle === 'mqtt' ? 'MQTT' : 'Endpunkt';
+    $raus = function ($grund, $http, $zusatz = '') {
+        return array('ok' => 0, 'grund' => $grund, 'http' => $http,
+                     'zeilen' => $zusatz === '' ? array('FEHLER;OK=0;GRUND=' . $grund)
+                                                : array('FEHLER;OK=0;GRUND=' . $grund, $zusatz),
+                     'art' => 'abgewiesen');
+    };
+    $roh = function ($k, $vorgabe) use ($param) {
+        if (!array_key_exists($k, $param) || $param[$k] === null) {
+            return $vorgabe;
+        }
+        return is_string($param[$k]) ? trim($param[$k]) : (is_int($param[$k]) ? (string) $param[$k] : '');
+    };
+    if ($aktion === 'quittieren') {
+        /* Nr. 19 (Welle 4): eine Nummer, die keine ist, wird abgewiesen. Bis 1.0.9 wurde aus nr=abc still 0 - und
+         * quittiert wurden ALLE Sticks. */
+        $nroh = $roh('nr', '0');
+        if (!preg_match('/^[0-9]{1,2}$/', $nroh)) {
+            return $raus('NR', 400, 'Erlaubt ist eine Sticknummer von 1 bis 99 oder 0 fuer alle.');
+        }
+        $nr = (int) $nroh;
+        $stand = fw_stand();
+        if ($nr > 0 && !isset($stand['geraete'][(string) $nr])) {
+            return $raus('GERAET_UNBEKANNT', 404);
+        }
+        if (!fw_auftrag('quittieren', $nr)) {
+            return $raus('SCHREIBEN', 500);
+        }
+        fw_log('Quittieren angefordert (' . $wo . '), Stick ' . ($nr ?: 'alle') . '.');
+        return array('ok' => 1, 'grund' => '', 'http' => 200, 'art' => 'gesetzt',
+                     'zeilen' => array('QUITTIERT;OK=1;NR=' . $nr . ';WIRKT_IN=' . fw_auftrag_wartezeit()));
+    }
+    if ($aktion === 'wartung') {
+        /* Nr. 19 (Welle 4): bis 1.0.9 wurde die Dauer still geklemmt, und aus dauer=abc wurde 0. Jetzt 400. */
+        $droh = $roh('dauer', '60');
+        if (!preg_match('/^[0-9]{1,4}$/', $droh) || (int) $droh > 1440) {
+            return $raus('DAUER', 400, 'Erlaubt ist eine ganze Zahl von 0 bis 1440 (Minuten).');
+        }
+        $dauer = (int) $droh;
+        /* X-7 (Entscheidung 19, Welle 4): dieselbe Dauer binnen 60 s geht nicht erneut an den Waechter - fuer
+         * HTTP und MQTT EIN Merker (gleichwert.json). Kein 429: eine andere Dauer gilt sofort. */
+        list($gw, $seit) = fw_gleichwert_pruefen('wartung', $dauer);
+        if ($gw === 'UNVERAENDERT') {
+            return array('ok' => 1, 'grund' => '', 'http' => 200, 'art' => 'unveraendert',
+                         'zeilen' => array('WARTUNG;OK=1;DAUER=' . $dauer . ';UNVERAENDERT=1;SEIT_S=' . (int) $seit));
+        }
+        if ($gw === 'MERKER') {
+            fw_log('Der Merker der Gleichwert-Unterdrueckung (' . fw_paths()['gleichwert']
+                 . ') laesst sich nicht fuehren - wartung aus Loxone wird mit 503 abgewiesen. '
+                 . 'Pruefen: Platz und Eigentuemer (loxberry) von data/plugins.');
+            return $raus('BREMSE_MERKER', 503);
+        }
+        if (!fw_auftrag('wartung', 0, $dauer)) {
+            fw_gleichwert_vergessen('wartung');
+            return $raus('SCHREIBEN', 500);
+        }
+        fw_log('Wartung angefordert (' . $wo . '): ' . $dauer . ' Minuten.');
+        return array('ok' => 1, 'grund' => '', 'http' => 200, 'art' => 'gesetzt',
+                     'zeilen' => array('WARTUNG;OK=1;DAUER=' . $dauer . ';WIRKT_IN=' . fw_auftrag_wartezeit()));
+    }
+    return $raus('AKTION_UNBEKANNT', 400);
+}
+
+/** Quittung fuer die Bruecke: array(true, '') bei ok >= 1, sonst array(false, Grund). */
+function fw_befehl_quittung($erg)
+{
+    if (is_array($erg) && isset($erg['ok']) && (int) $erg['ok'] >= 1) {
+        return array(true, '');
+    }
+    return array(false, (is_array($erg) && isset($erg['grund']) && $erg['grund'] !== '') ? (string) $erg['grund'] : 'FEHLER');
+}
+
+/* ---------------- G2: Befehlsbruecke fuer die Oberflaeche (Abschrift ww_bruecke_*) ---------------- */
+
+/** Die Bruecke als Bibliothek laden (BB_NUR_LADEN). Rueckgabe true, wenn bb_waechter() danach da ist. */
+function fw_bruecke_laden()
+{
+    if (function_exists('bb_waechter')) {
+        return true;
+    }
+    $p = fw_paths();
+    $kand = array();
+    if ($p['bindir'] !== '') {
+        $kand[] = $p['bindir'] . '/befehlsbruecke.php';
+    }
+    if (fw_archivlage()) {
+        $kand[] = dirname(dirname(__DIR__)) . '/bin/befehlsbruecke.php';
+    }
+    foreach ($kand as $k) {
+        if (is_file($k)) {
+            if (!defined('BB_NUR_LADEN')) {
+                define('BB_NUR_LADEN', true);
+            }
+            require_once $k;
+            return function_exists('bb_waechter');
+        }
+    }
+    return false;
+}
+
+/** Die Befehlsliste der Bruecke (bb_liste()). array(Liste oder null, Fehlertext). Die Befehle stehen unter ['befehle']. */
+function fw_bruecke_liste()
+{
+    if (!fw_bruecke_laden()) {
+        return array(null, fw_t('BEFEHL.T_NICHT_DA'));
+    }
+    list($z, $fehler) = bb_zuordnung_laden();
+    if ($z === null) {
+        return array(null, $fehler);
+    }
+    $GLOBALS['bb_zuordnung'] = $z;
+    list($fehl) = bb_zuordnung_pruefen($z);
+    if ($fehl) {
+        return array(null, $fehl[0]);
+    }
+    return array(bb_liste($z, bb_einstellungen($z)), '');
+}
+
+/** Nach dem Speichern im Reiter MQTT: start (Haken an) bzw. stop. array(rc|null, start|stop|'', Ausgabe). */
+function fw_bruecke_schalten($cfg = null)
+{
+    if (!is_array($cfg)) {
+        $cfg = fw_config(false);
+    }
+    if (!fw_bruecke_laden()) {
+        return array(1, '', fw_t('BEFEHL.T_NICHT_DA'));
+    }
+    $p = bb_pfade();
+    if (!$p) {
+        return array(1, '', 'keine LoxBerry-Installation erkannt');
+    }
+    if (!empty($cfg['befehle_mqtt_ein'])) {
+        list($rc, $aus) = bb_sh($p, 'start');
+        return array($rc, 'start', $aus);
+    }
+    if (!bb_dienste()) {
+        return array(null, '', '');
+    }
+    list($rc, $aus) = bb_sh($p, 'stop');
+    return array($rc, 'stop', $aus);
+}
+
+/** Lage der Bruecke (Reiter Test, Reiter MQTT, Healthcheck): array(true|false|null, Text); null = aus (Haken). */
+function fw_bruecke_lage()
+{
+    if (!fw_bruecke_laden()) {
+        return array(false, fw_t('BEFEHL.T_NICHT_DA'));
+    }
+    list($soll, $grund) = bb_soll_ermitteln();
+    if ($soll === 1) {
+        return array(null, fw_t('BEFEHL.T_AUS'));
+    }
+    if ($soll !== 0) {
+        return array(false, sprintf(fw_t('BEFEHL.T_DEFEKT'), $grund));
+    }
+    $zu = bb_zustand_lesen();
+    $pids = bb_dienste();
+    $alter = (is_array($zu) && isset($zu['ts'])) ? time() - (int) $zu['ts'] : null;
+    if ($pids && $alter !== null && $alter <= BB_WACHE_GRENZE && !empty($zu['abo'])) {
+        $zl = (isset($zu['zaehler']) && is_array($zu['zaehler'])) ? $zu['zaehler'] : array();
+        $txt = sprintf(fw_t('BEFEHL.T_LAEUFT'), count($pids),
+            isset($zl['angenommen']) ? (int) $zl['angenommen'] : 0, isset($zl['abgelehnt']) ? (int) $zl['abgelehnt'] : 0);
+        $lz = isset($zu['letzter']) && is_array($zu['letzter']) ? $zu['letzter'] : null;
+        if ($lz !== null && isset($lz['name'])) {
+            $txt .= ' ' . sprintf(fw_t('BEFEHL.T_LETZTER'), (string) $lz['name'],
+                isset($lz['ergebnis']) ? (string) $lz['ergebnis'] : '-',
+                isset($lz['zeit']) ? max(0, time() - (int) $lz['zeit']) : 0);
+        } else {
+            $txt .= ' ' . fw_t('BEFEHL.T_KEINER');
+        }
+        return array(true, $txt);
+    }
+    $wie = !$pids ? 'kein Dienst' : ($alter === null ? 'kein Zustand' : ($alter > BB_WACHE_GRENZE
+        ? 'Zustand ' . $alter . ' s alt' : 'ohne Abo'));
+    return array(false, sprintf(fw_t('BEFEHL.T_STEHT'), $wie));
+}
+
+/** befehlsbruecke.php --pruefen: array(rc, Zeilen). */
+function fw_bruecke_pruefen()
+{
+    if (!fw_bruecke_laden()) {
+        return array(1, array(fw_t('BEFEHL.T_NICHT_DA')));
+    }
+    $p = bb_pfade();
+    /* Installiert der Ordner der Bruecke; nur im ausgepackten Archiv dessen bin/ (fw_archivlage()). */
+    $skript = $p ? $p['bin'] . '/befehlsbruecke.php'
+        : (fw_archivlage() ? dirname(dirname(__DIR__)) . '/bin/befehlsbruecke.php' : '');
+    if ($skript === '' || !is_file($skript)) {
+        return array(1, array(fw_t('BEFEHL.T_NICHT_DA')));
+    }
+    $php = (defined('PHP_BINARY') && PHP_BINARY !== '') ? PHP_BINARY : 'php';
+    $aus = array();
+    $rc = 1;
+    @exec(escapeshellarg($php) . ' ' . escapeshellarg($skript) . ' --pruefen 2>&1', $aus, $rc);
+    return array((int) $rc, $aus);
+}
+
+/** Der Rechnername fuer UDP-Adressen in der Brueckenvorlage: nie die Rueckschleife (Regeln/07). */
+function fw_rechnername()
+{
+    $h = isset($_SERVER['HTTP_HOST']) ? preg_replace('/[^A-Za-z0-9\.\-:]/', '', (string) $_SERVER['HTTP_HOST']) : '';
+    if (substr_count($h, ':') === 1) {
+        $h = substr($h, 0, strpos($h, ':'));
+    }
+    if (in_array(strtolower($h), array('', '127.0.0.1', 'localhost', '::1', '[::1]'), true)) {
+        $g = gethostname();
+        $h = ($g !== false && $g !== '') ? $g : 'loxberry';
+    }
+    return $h;
+}
+
+/** Die Vorlage der Befehlsbruecke fuer Loxone (bb_vorlage(), CRLF, UDP an den LoxBerry). array(Name, Inhalt) oder null. */
+function fw_vorlage_befehle()
+{
+    list($l) = fw_bruecke_liste();
+    if ($l === null) {
+        return null;
+    }
+    $bp = bb_pfade();
+    $port = $bp ? bb_broker($bp)['udpin'] : 11884;
+    return array('VQ_funkwacht_mqtt.xml', bb_vorlage($l, fw_rechnername(), $port));
+}
+
+/* ---------------- Healthcheck (Form Weissware 0.9.44 / BYD 0.9.29) ---------------- */
+
+/**
+ * Das Urteil des LoxBerry-Healthchecks (bin/healthcheck), rein. Regeln/03 :73 (3 Fehler, 4 Warnung, 5 in Ordnung,
+ * 6 Hinweis), Regeln/04 :809 (geurteilt wird ueber das ALTER, nie ueber eine einzelne Messung).
+ * $f: eingerichtet (bool), aktualisierung (bool, Marke .upgrade_laeuft juenger als 1 h), pid (int; 0 = kein Waechter),
+ * start_alter_s, mess_alter_s (stand.json des Waechters; -1 = keins), takt_s, sticks, krank, global_aus,
+ * mqtt_zeilen (bool, eine Zeile misst ueber MQTT), mithoerer_pid, mqtt_ein, gateway, v2 (array(lage, Text)),
+ * bruecke_soll, bruecke_laeuft (bool|null). Rueckgabe array(status, Text); der Text nennt keine Namen, Pfade,
+ * Dienste oder Zugangsdaten.
+ */
+function fw_gesund_urteil(array $f)
+{
+    $f += array('eingerichtet' => false, 'aktualisierung' => false, 'pid' => 0, 'start_alter_s' => -1,
+                'mess_alter_s' => -1, 'takt_s' => 60, 'sticks' => 0, 'krank' => 0, 'global_aus' => false,
+                'mqtt_zeilen' => false, 'mithoerer_pid' => 0, 'mqtt_ein' => false, 'gateway' => array(),
+                'v2' => array(null, ''), 'bruecke_soll' => false, 'bruecke_laeuft' => null);
+    if (!$f['eingerichtet']) {
+        return array(6, 'nicht eingerichtet - im Reiter Einstellungen eine Zeile ausfuellen (Name, Art, Pfad)');
+    }
+    if ($f['aktualisierung'] && (int) $f['pid'] <= 0) {
+        return array(6, 'Aktualisierung laeuft - der Waechter startet danach von selbst');
+    }
+    $befunde = array();
+    $status = 5;
+    $setze = function ($s, $t) use (&$status, &$befunde) {
+        if ($s < $status) {
+            $status = $s;
+        }
+        $befunde[] = $t;
+    };
+    $takt = max(15, (int) $f['takt_s']);
+    $grenze = max(600, 3 * $takt);
+    $pid = (int) $f['pid'];
+    $a = (int) $f['mess_alter_s'];
+    if ($pid <= 0) {
+        $setze(3, 'Waechter laeuft nicht (der Minutentakt startet ihn neu; bleibt es so, Reiter Logdateien)');
+    } elseif ($a < 0) {
+        $s0 = (int) $f['start_alter_s'];
+        if ($s0 >= 0 && $s0 > $grenze) {
+            $setze(3, sprintf('Waechter laeuft seit %d min, hat aber noch nie gemessen', (int) round($s0 / 60)));
+        } else {
+            $setze(4, 'Waechter laeuft, hat aber noch keine Messung abgelegt');
+        }
+    } elseif ($a > $grenze) {
+        $setze(3, sprintf('letzte Messung vor %d min (erwartet hoechstens %d min)', (int) round($a / 60),
+            (int) round($grenze / 60)));
+    }
+    if ((int) $f['krank'] > 0) {
+        $setze(4, sprintf('%d von %d ueberwachten Zeilen gestoert', (int) $f['krank'], (int) $f['sticks']));
+    }
+    if ($f['mqtt_zeilen'] && (int) $f['mithoerer_pid'] <= 0) {
+        $setze(4, 'eine Zeile misst ueber MQTT, aber der MQTT-Mithoerer laeuft nicht');
+    }
+    if ($f['mqtt_ein']) {
+        $gw = is_array($f['gateway']) ? $f['gateway'] : array();
+        if (empty($gw['gefunden']) || empty($gw['udpport'])) {
+            $setze(4, 'MQTT eingeschaltet, aber kein MQTT-Gateway mit UDP-Eingang eingerichtet - es wird nichts gesendet');
+        } elseif (empty($gw['autostart'])) {
+            $setze(4, 'MQTT eingeschaltet, aber das MQTT-Gateway steht nicht auf Autostart');
+        }
+    }
+    if (is_array($f['v2']) && isset($f['v2'][0]) && $f['v2'][0] === 0) {
+        $setze(4, 'Gateway V2: ' . (isset($f['v2'][1]) ? (string) $f['v2'][1] : ''));
+    }
+    if ($f['bruecke_soll'] && $f['bruecke_laeuft'] === false) {
+        $setze(4, 'Befehle ueber MQTT eingeschaltet, aber die Befehlsbruecke steht');
+    }
+    if (!$befunde) {
+        return array(5, sprintf('in Ordnung - Waechter misst, %d Zeile(n) ueberwacht, letzte Messung vor %d s%s',
+            (int) $f['sticks'], max(0, $a), $f['global_aus'] ? ', Heilen ist ausgeschaltet (nur melden)' : ''));
+    }
+    return array($status, implode('; ', $befunde));
+}
+
+/** Die Fakten des Healthchecks - nur lesend: kein Netz, kein Broker, kein Protokoll, keine Datei geschrieben. */
+function fw_gesund_fakten(array $cfg)
+{
+    clearstatcache();
+    $p = fw_paths();
+    $jetzt = time();
+    $f = array();
+    $f['eingerichtet'] = (bool) fw_eingerichtet($cfg);
+    $marke = $p['datadir'] !== '' ? $p['datadir'] . '.upgrade_laeuft' : '';
+    $f['aktualisierung'] = $marke !== '' && is_file($marke) && ($jetzt - (int) @filemtime($marke)) < 3600;
+    $f['pid'] = (int) fw_dienst_pid();
+    $pf = $p['datadir'] . '/dienst.pid';
+    $f['start_alter_s'] = ($f['pid'] > 0 && is_file($pf)) ? max(0, $jetzt - (int) @filemtime($pf)) : -1;
+    $f['mess_alter_s'] = (int) fw_alter();
+    $f['takt_s'] = isset($cfg['takt']) ? (int) $cfg['takt'] : 60;
+    $sticks = 0;
+    $mqtt_zeilen = false;
+    foreach ((isset($cfg['geraete']) && is_array($cfg['geraete']) ? $cfg['geraete'] : array()) as $g) {
+        if (!is_array($g) || trim((string) (isset($g['name']) ? $g['name'] : '')) === '' || empty($g['aktiv'])) {
+            continue;
+        }
+        $sticks++;
+        if ((isset($g['art']) && $g['art'] === 'mqtt') || (isset($g['art2']) && $g['art2'] === 'mqtt')) {
+            $mqtt_zeilen = true;
+        }
+    }
+    $f['sticks'] = $sticks;
+    $f['mqtt_zeilen'] = $mqtt_zeilen;
+    $f['mithoerer_pid'] = $mqtt_zeilen ? (int) fw_mithoerer_pid() : 0;
+    $st = fw_stand();
+    $f['krank'] = ($f['pid'] > 0 && isset($st['krank']) && is_numeric($st['krank'])) ? (int) $st['krank'] : 0;
+    $f['global_aus'] = !empty($cfg['global_aus']);
+    $f['mqtt_ein'] = !empty($cfg['mqtt_ein']);
+    $f['gateway'] = fw_mqtt_zustand();
+    $f['v2'] = fw_v2_haken_lage($cfg);
+    $f['bruecke_soll'] = !empty($cfg['befehle_mqtt_ein']);
+    $f['bruecke_laeuft'] = null;
+    if ($f['bruecke_soll'] && fw_bruecke_laden()) {
+        $l = fw_bruecke_lage();
+        $f['bruecke_laeuft'] = $l[0] === true;
+    }
+    return $f;
 }

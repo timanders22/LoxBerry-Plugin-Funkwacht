@@ -62,6 +62,14 @@ case "$PFOLDER" in
 esac
 
 PBIN="$BASE/bin/plugins/$PFOLDER"
+# Gruppe 44 (1.0.17): die Befehlsbruecke anhalten, bevor der Waechter und die Ordner gehen.
+if [ -f "$PBIN/befehlsbruecke.sh" ]; then
+    if bash "$PBIN/befehlsbruecke.sh" stop >/dev/null 2>&1; then
+        echo "<OK> Befehlsbruecke angehalten."
+    else
+        echo "<INFO> Befehlsbruecke: stop meldete einen Fehler - sie lief vermutlich nicht."
+    fi
+fi
 DIENST="$PBIN/dienst.sh"
 [ -x "$DIENST" ] && "$DIENST" stop >/dev/null 2>&1
 

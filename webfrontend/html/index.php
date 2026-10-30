@@ -29,6 +29,12 @@
  * UND ER LEGT NICHTS AN. fw_config(false) liest nur. Gemessen an 0.9.3: ein
  * einziger Aufruf OHNE Token, korrekt mit 403 beantwortet, hinterliess den
  * Konfigordner und eine frisch geschriebene funkwacht.json.
+ *
+ * SEIT 1.0.17 (Gruppe 44): ein eigener Schalter endpunkt_ein (Reiter MQTT). Eine Neuinstallation hat ihn aus -
+ * neue Anlagen nehmen das MQTT-Gateway V2 und die Befehlsbruecke; beim Update setzt postinstall.sh 1, wenn der
+ * Schluessel fehlt. Ausgeschaltet antwortet der Endpunkt nach dem Token mit 403 GRUND=ENDPUNKT_AUS. quittieren
+ * und wartung pruefen und beauftragen in fw_befehl_annehmen() (fw_lib.php) - DIESELBE Funktion nimmt die Befehle
+ * der Befehlsbruecke an.
  */
 
 error_reporting(E_ALL & ~E_DEPRECATED & ~E_NOTICE);
@@ -56,6 +62,16 @@ if (!fw_token_gueltig($fw_soll)) {
 if (!hash_equals($fw_soll, $fw_ist)) {
     http_response_code(403);
     echo "FEHLER;OK=0;GRUND=TOKEN\n";
+    exit;
+}
+
+/* Gruppe 44 (1.0.17, G3, Hausform G39 E-E1 A): der HTTP-Endpunkt hat einen eigenen Schalter endpunkt_ein. Geprueft
+ * NACH dem Token: ein falsches Token antwortet wie bisher TOKEN. Lesend, schaltend und ?selftest gleich. */
+if (empty($fw_cfg['endpunkt_ein'])) {
+    http_response_code(403);
+    echo "FEHLER;OK=0;GRUND=ENDPUNKT_AUS\n";
+    echo "Der HTTP-Endpunkt ist ausgeschaltet (Reiter MQTT, Haken 'HTTP-Endpunkt fuer Loxone'). "
+       . "Neue Anlagen nehmen das MQTT-Gateway V2 und die Befehlsbruecke.\n";
     exit;
 }
 
@@ -87,79 +103,23 @@ if (isset($_GET['selftest'])) {
 
 $fw_stand = fw_stand();
 
-/* ---------------- Quittieren ----------------
- * Setzt Bremse und Eskalationsstand zurueck, damit der Waechter wieder
- * urteilen darf. Der Auftrag geht ueber eine Datei an den Waechter: er ist
- * der einzige Schreiber der Historie. Gemeldet wird deshalb, WAS geschrieben
- * wurde und WANN es spaetestens wirkt - nicht ein Erfolg, den hier niemand
- * nachmessen kann. */
-if ($fw_aktion === 'quittieren') {
-    /* Nr. 19 (Welle 4): eine Nummer, die keine ist, wird abgewiesen. Bis
-     * 1.0.9 wurde aus nr=abc still 0 - und quittiert wurden ALLE Sticks. */
-    $fw_nroh = !isset($_GET['nr']) ? '0' : (is_string($_GET['nr']) ? trim($_GET['nr']) : '');
-    if (!preg_match('/^[0-9]{1,2}$/', $fw_nroh)) {
-        http_response_code(400);
-        echo "FEHLER;OK=0;GRUND=NR\n";
-        echo "Erlaubt ist eine Sticknummer von 1 bis 99 oder 0 fuer alle.\n";
-        exit;
+/* ---------------- Quittieren und Wartung ----------------
+ * quittieren setzt Bremse und Eskalationsstand zurueck, damit der Waechter wieder urteilen darf; wartung haelt das
+ * Heilen fuer eine Weile an und geht von selbst wieder aus (dauer=0 beendet sie). Beide gehen ueber eine Datei an
+ * den Waechter: er ist der einzige Schreiber der Historie. Gemeldet wird, WAS geschrieben wurde und WANN es
+ * spaetestens wirkt.
+ * Gruppe 44 (1.0.17, G2): die Pruefungen (Nr. 19: NR, GERAET_UNBEKANNT, DAUER; X-7: dieselbe Dauer binnen 60 s
+ * UNVERAENDERT=1; BREMSE_MERKER; SCHREIBEN) und das Beauftragen stehen seit 1.0.17 in fw_befehl_annehmen()
+ * (fw_lib.php) - DIESELBE Funktion nimmt die Befehle der Befehlsbruecke an (Regeln/07 Abschnitt 3a). Antwortzeilen
+ * und HTTP-Codes wie bis 1.0.16 (Probe P-G2-5 byte-gleich). */
+if (in_array($fw_aktion, fw_schaltende(), true)) {
+    $fw_erg = fw_befehl_annehmen($fw_aktion, array(
+        'nr'    => isset($_GET['nr']) ? $_GET['nr'] : null,
+        'dauer' => isset($_GET['dauer']) ? $_GET['dauer'] : null), 'http');
+    if ((int) $fw_erg['http'] !== 200) {
+        http_response_code((int) $fw_erg['http']);
     }
-    $nr = (int) $fw_nroh;
-    if ($nr > 0 && !isset($fw_stand['geraete'][(string) $nr])) {
-        http_response_code(404);
-        echo "FEHLER;OK=0;GRUND=GERAET_UNBEKANNT\n";
-        exit;
-    }
-    if (!fw_auftrag('quittieren', $nr)) {
-        http_response_code(500);
-        echo "FEHLER;OK=0;GRUND=SCHREIBEN\n";
-        exit;
-    }
-    fw_log('Quittieren angefordert (Endpunkt), Stick ' . ($nr ?: 'alle') . '.');
-    echo "QUITTIERT;OK=1;NR=" . $nr . ";WIRKT_IN=" . fw_auftrag_wartezeit() . "\n";
-    exit;
-}
-
-/* ---------------- Wartung ----------------
- * Haelt das Heilen fuer eine Weile an - und geht von selbst wieder aus. Ein
- * Schalter, den jemand von Hand setzt, wird vergessen; einer mit Ablauf
- * nicht. dauer=0 beendet sie sofort. */
-if ($fw_aktion === 'wartung') {
-    /* Nr. 19 (Welle 4): bis 1.0.9 wurde die Dauer still geklemmt, und aus
-     * dauer=abc wurde 0 - die Wartung ging aus. Jetzt 400. */
-    $fw_droh = !isset($_GET['dauer']) ? '60' : (is_string($_GET['dauer']) ? trim($_GET['dauer']) : '');
-    if (!preg_match('/^[0-9]{1,4}$/', $fw_droh) || (int) $fw_droh > 1440) {
-        http_response_code(400);
-        echo "FEHLER;OK=0;GRUND=DAUER\n";
-        echo "Erlaubt ist eine ganze Zahl von 0 bis 1440 (Minuten).\n";
-        exit;
-    }
-    $dauer = (int) $fw_droh;
-    /* X-7 (Entscheidung 19, Welle 4): dieselbe Dauer binnen 60 s geht nicht
-     * erneut an den Waechter - ein flatternder Loxone-Ausgang verlaengerte
-     * sonst die Wartung im Sekundentakt und fuellte die Auftragsdatei. Kein
-     * 429: eine andere Dauer gilt sofort. Der Merker faellt geschlossen
-     * aus. */
-    list($fw_gw, $fw_seit) = fw_gleichwert_pruefen('wartung', $dauer);
-    if ($fw_gw === 'UNVERAENDERT') {
-        echo "WARTUNG;OK=1;DAUER=" . $dauer . ";UNVERAENDERT=1;SEIT_S=" . (int) $fw_seit . "\n";
-        exit;
-    }
-    if ($fw_gw === 'MERKER') {
-        fw_log('Der Merker der Gleichwert-Unterdrueckung (' . fw_paths()['gleichwert']
-             . ') laesst sich nicht fuehren - wartung aus Loxone wird mit 503 abgewiesen. '
-             . 'Pruefen: Platz und Eigentuemer (loxberry) von data/plugins.');
-        http_response_code(503);
-        echo "FEHLER;OK=0;GRUND=BREMSE_MERKER\n";
-        exit;
-    }
-    if (!fw_auftrag('wartung', 0, $dauer)) {
-        fw_gleichwert_vergessen('wartung');
-        http_response_code(500);
-        echo "FEHLER;OK=0;GRUND=SCHREIBEN\n";
-        exit;
-    }
-    fw_log('Wartung angefordert (Endpunkt): ' . $dauer . ' Minuten.');
-    echo "WARTUNG;OK=1;DAUER=" . $dauer . ";WIRKT_IN=" . fw_auftrag_wartezeit() . "\n";
+    echo implode("\n", $fw_erg['zeilen']) . "\n";
     exit;
 }
 

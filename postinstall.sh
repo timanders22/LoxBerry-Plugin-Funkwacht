@@ -153,6 +153,42 @@ if [ "$MARKE_FRISCH" = "1" ] && [ -f "$BK" ]; then
     fi
 fi
 
+# Gruppe 44 (1.0.17, G3): beim UPDATE (Marke .upgrade_laeuft) bekommt eine Konfiguration ohne endpunkt_ein den
+# Wert 1 - der Bestand nutzt den HTTP-Weg und soll nach dem Update nichts verlieren. Eine Neuinstallation bleibt bei
+# der Vorgabe 0 (Gateway V2 und Befehlsbruecke). Konfiguration UND Zweitschrift; Rechte bleiben; ein vorhandener
+# Wert bleibt unangetastet; leere oder kaputte Dateien auch. Form Weissware 0.9.44 / BYD 0.9.29 (perl JSON::PP).
+if [ "$MARKE_FRISCH" = "1" ] && command -v perl >/dev/null 2>&1; then
+    for f in "$CF" "$BK"; do
+        [ -s "$f" ] && [ ! -L "$f" ] || continue
+        perl -MJSON::PP -e '
+            my $f = shift; local $/;
+            open my $fh, "<", $f or exit 1; my $r = <$fh>; close $fh;
+            my $d = eval { JSON::PP->new->decode($r) };
+            exit 1 unless ref $d eq "HASH";
+            exit 3 unless %$d;
+            exit 3 if exists $d->{endpunkt_ein};
+            $d->{endpunkt_ein} = 1;
+            my $mode = (stat $f)[2] & 07777;
+            my $t = "$f.g44.$$";
+            umask 077;
+            open my $o, ">", $t or exit 1;
+            (print $o JSON::PP->new->pretty->canonical->encode($d)) or exit 1;
+            close $o or exit 1;
+            chmod $mode, $t;
+            rename $t, $f or exit 1;
+            exit 0;
+        ' "$f"
+        case $? in
+            0) echo "<OK> $(basename "$f"): HTTP-Endpunkt bleibt eingeschaltet (endpunkt_ein = 1, Bestand)." ;;
+            3) ;;
+            *) echo "<INFO> $(basename "$f"): endpunkt_ein liess sich nicht ergaenzen - der Endpunkt ist aus,"
+               echo "<INFO> bis er im Reiter MQTT eingeschaltet wird." ;;
+        esac
+    done
+fi
+# Gruppe 44: Healthcheck (sbin/healthcheck.pl ruft die Datei direkt) und Befehlsbruecke ausfuehrbar.
+chmod 755 "$PBIN/healthcheck" "$PBIN/befehlsbruecke.sh" 2>/dev/null
+
 # ---------- Python pruefen ----------
 if ! command -v python3 >/dev/null 2>&1; then
     echo "<FAIL> python3 wurde nicht gefunden. Ohne Python laeuft der Waechter nicht."
@@ -181,7 +217,9 @@ if [ -d "$BEST" ] && [ "$MARKE_FRISCH" = "1" ]; then
     # mqtt_altpraefix.json (S1, offener Punkt 9 aus Stufe 1): die Vormerkung
     # abzuraeumender MQTT-Praefixe; ohne sie blieben nach einem Upgrade
     # zwischen Speichern und naechstem Durchgang Altwerte am Broker stehen.
-    for F in historie.json faehigkeit.json mqtt_stand.json mqtt_altpraefix.json; do
+    # Gruppe 44 (1.0.17): dazu die Merker der Abraeumung und die Wiederholsperre der Ansage (preupgrade.sh).
+    for F in historie.json faehigkeit.json mqtt_stand.json mqtt_altpraefix.json \
+             retain_dienstaussagen_geraeumt retain_sticks_geraeumt ansage.json; do
         if [ -f "$BEST/$F" ] && [ ! -f "$PDATA/$F" ]; then
             if cp -p "$BEST/$F" "$PDATA/$F" 2>/dev/null && cmp -s "$BEST/$F" "$PDATA/$F"; then
                 ZURUECK="$ZURUECK $F"

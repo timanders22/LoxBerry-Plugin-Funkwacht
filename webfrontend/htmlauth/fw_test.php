@@ -330,6 +330,10 @@ function fw_test_selbstpruefung()
     $ja = fw_klartext('ALLG.JA');
     $nein = fw_klartext('ALLG.NEIN');
 
+    /* Gruppe 44 (1.0.17, G3): ist der HTTP-Endpunkt ausgeschaltet, wird er nicht aufgerufen - die Zeile steht grau. */
+    if (empty($cfg['endpunkt_ein'])) {
+        $o[] = fw_pruefzeile(fw_klartext('TEST.P_ENDPUNKT'), null, fw_klartext('BEFEHL.T_ENDPUNKT_AUS'));
+    } else {
     /* 1. Der eigene Endpunkt - drei Ausgaenge, nicht zwei. */
     $url = fw_endpunkt() . '?token=' . fw_token() . '&aktion=status';
     list($antwort, $code) = fw_http_holen($url, 8);
@@ -378,6 +382,8 @@ function fw_test_selbstpruefung()
         $o[] = fw_pruefzeile(fw_klartext('TEST.P_SELFTEST'), $ok,
             $ok ? fw_klartext('TEST.P_SELFTEST_OK')
                 : sprintf(fw_klartext('TEST.P_SELFTEST_FEHL'), substr((string) $st, 0, 120)));
+    }
+
     }
 
     /* 4.-6. Die Stellen, die ein Werkzeug an dieser Oberflaeche nicht misst. */
@@ -488,6 +494,22 @@ function fw_test_selbstpruefung()
 
     list($t_ok, $t_txt) = fw_probe_themen();
     $o[] = fw_pruefzeile(fw_klartext('TEST.P_F_THEMEN'), $t_ok, $t_txt);
+
+    /* Gruppe 44 (1.0.17): Gateway V2 (einheitliche Pruefzeile) und die Befehlsbruecke. */
+    list($v2_s, $v2_t) = fw_v2_haken_lage($cfg);
+    $o[] = fw_pruefzeile(fw_klartext('PRUEF.V2_FRAGE'), $v2_s === 1 ? true : ($v2_s === 0 ? false : null),
+                         trim(strip_tags($v2_t)));
+    if (!empty($cfg['befehle_mqtt_ein'])) {
+        list($b_s, $b_t) = fw_bruecke_lage();
+        $o[] = fw_pruefzeile(fw_klartext('BEFEHL.F_BRUECKE'), $b_s, trim(strip_tags($b_t)));
+        list($b_rc, $b_aus) = fw_bruecke_pruefen();
+        $b_fehl = array_values(preg_grep('/\[FEHL\]/', $b_aus));
+        $b_gut = ((int) $b_rc === 0 && !$b_fehl);
+        $o[] = fw_pruefzeile(fw_klartext('BEFEHL.F_PRUEFEN'), $b_gut,
+            $b_gut ? fw_klartext('BEFEHL.T_PRUEFEN_OK') : implode(' ', array_slice($b_fehl ? $b_fehl : $b_aus, 0, 3)));
+    } else {
+        $o[] = fw_pruefzeile(fw_klartext('BEFEHL.F_BRUECKE'), null, fw_klartext('BEFEHL.T_AUS'));
+    }
 
     list($n_ok, $n_kreuz, $n_ohne) = fw_pruefzeile(null);
     $o[] = '';
@@ -844,6 +866,10 @@ function fw_test_mqtt()
 /** Den eigenen Endpunkt aufrufen - so, wie der Miniserver es taete. */
 function fw_test_endpunkt()
 {
+    /* Gruppe 44 (1.0.17, G3): ausgeschaltet wird er nicht aufgerufen. */
+    if (empty(fw_config(false)['endpunkt_ein'])) {
+        return fw_klartext('BEFEHL.T_ENDPUNKT_AUS');
+    }
     $url = fw_endpunkt() . '?token=' . fw_token() . '&aktion=status';
     $o = array(sprintf(fw_klartext('TEST.EP_AUFRUF'), $url), '');
     list($text, $code) = fw_http_holen($url, 10);

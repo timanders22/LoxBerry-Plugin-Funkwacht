@@ -4,10 +4,40 @@
 Merkt, wenn ein Stick verstummt, weckt ihn in Stufen wieder auf — und misst
 nach, ob es geholfen hat.
 
-Version 1.0.16 · LoxBerry ab 3.0 · PHP 7.4 und 8.x · Python 3 mit paho-mqtt
+Version 1.0.17 · LoxBerry ab 3.0 · PHP 7.4 und 8.x · Python 3 mit paho-mqtt
 (Debian-Paket, über `dpkg/apt`)
 
 ---
+
+## Neu in 1.0.17
+
+Hausform (Gruppe 44): MQTT-Gateway V2, Befehlsbrücke, Healthcheck – und die Zigbee-Vorlagen erkennen den Dienst.
+
+* **Zigbee2MQTT oder Zigbee2MqttNG:** Die Vorlagen „über MQTT“ und „als Paket“ setzen den Dienst
+  `zigbee2mqttng`, wenn das Plugin Zigbee2MqttNG installiert ist (Plugin-Datenbank, Gegenprobe systemd), sonst
+  `zigbee2mqtt`; der Reiter Einstellungen zeigt, was erkannt wurde. Die eigene Vorlage „Zigbee2MqttNG über MQTT“
+  entfällt. Gespeicherte Zeilen bleiben unberührt. Der Protokollpfad unter Zigbee2MqttNG ist noch nicht am Gerät
+  gemessen – bitte mit „Jetzt messen“ prüfen.
+* **Gateway V2:** neues Lebenszeichen `funkwacht/zaehler` (0…999 je Durchgang, nie retained); Reiter MQTT mit der
+  Tabelle der Datenpunkte (Name in Loxone, Noncached nur für `ok`, `zaehler`, je Stick `ok` und
+  `status/befehle`); Reiter Test prüft die Haken.
+* **Befehle über MQTT:** `funkwacht/befehl/quittieren`, `…/befehl/<n>/quittieren` und `…/befehl/wartung <Minuten>`
+  über die Befehlsbrücke 1.0.2 (Haken „Befehle über MQTT annehmen“, ab Werk aus; Vorlage im Reiter MQTT). Dieselben
+  Prüfungen wie der HTTP-Endpunkt; einen Heilbefehl gibt es weiter nicht.
+* **HTTP-Endpunkt** mit eigenem Schalter: nach einem Update an, bei einer Neuinstallation aus.
+* **Healthcheck** für den LoxBerry: misst der Wächter, wie alt ist seine Messung, sind Zeilen gestört.
+* Über ein Update gerettet werden jetzt auch die Merker der Altwert-Abräumung und die Wiederholsperre der Ansage.
+* Sprachausgabe 1.2.1: Sonos (Sonos4Lox, SonoX) wählbar, höchstens 20 s je Ansage.
+* **Mehrere Lautsprecher gleichzeitig (Sprachmodul 1.2.1):** Unter der Ausgabeart (jetzt „Ziel 1“) nimmt die Tabelle
+  *Weitere Ausgabeziele (gleichzeitig)* bis zu fünf weitere Ziele auf – etwa Google-Lautsprecher (Chromecast 4 Lox NG)
+  in einem Raum und Amazon Echo (Alexa-NG) in einem anderen neben dem Loxone Music Server. Die Ansage geht an alle
+  eingeschalteten Ziele zugleich (eine Ansage dauert so lange wie das langsamste Ziel, höchstens 20 s);
+  scheitert eines, sprechen die anderen. Protokoll und Reiter Test nennen jedes Ziel, im Reiter Test gibt es je Ziel
+  eine Testansage. Die bestehende Einstellung ist unverändert Ziel 1; ohne weitere Ziele verhält sich alles wie in
+  1.0.16. Antwort an Loxone, MQTT-Themen und Brückenbefehl `ansage` bleiben, wie sie sind.
+* **Vor einem Zurückgehen** auf 1.0.16 oder älter die weiteren Ziele entfernen: ältere Fassungen kennen die Liste nicht
+  und fielen beim Laden auf die Werkseinstellung der Sprachausgabe zurück.
+* Gerendert unter PHP 7.4, 8.4 und 8.5, nicht am Gerät angesehen.
 
 ## Neu in 1.0.16
 

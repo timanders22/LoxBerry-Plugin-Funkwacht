@@ -27,6 +27,10 @@ case "$DIENST" in
         LOGD="$LBHOMEDIR/log/plugins/$LBPPLUGINDIR"
         ;;
 esac
+# Gruppe 44 (1.0.17): zuerst der Waechter der Befehlsbruecke - er startet sie nur mit dem Haken "Befehle ueber
+# MQTT annehmen" und haelt sie sonst an (bin/befehlsbruecke.sh, Stamm 1.0.2). Liegt neben dienst.sh.
+BBSH="${DIENST%/*}/befehlsbruecke.sh"
+[ -f "$BBSH" ] && /bin/bash "$BBSH" waechter >/dev/null 2>&1
 [ -x "$DIENST" ] || exit 0
 # I7 (Pruefung 29.09.2026): die FEHLERAUSGABE geht nach cron.err, nicht nach
 # /dev/null (Hausstandard, Regeln/06; Bauart Abfahrtsassistent 1.6.16 und

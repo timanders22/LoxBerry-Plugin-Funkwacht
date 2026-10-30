@@ -1,0 +1,76 @@
+#!/usr/bin/env php
+<?php
+/**
+ * Funkwacht - Anschluss an den LoxBerry-Healthcheck (seit 1.0.17, Gruppe 44)
+ *
+ * sbin/healthcheck.pl ruft eine ausfuehrbare Datei bin/healthcheck des Plugins auf - einmal mit "title", einmal
+ * mit "check" (Regeln/03 :73; direkt, die Shebang-Zeile entscheidet - Regeln/02 :691). Antworten sind JSON:
+ *   title -> {"desc":"Funkwacht"}
+ *   check -> {"desc", "status", "result", "url", "logfile"}; Status 0 unbekannt, 3 Fehler, 4 Warnung,
+ *            5 in Ordnung, 6 Hinweis.
+ * Form von Weissware Cloud 0.9.44 / BYD Autos 0.9.29: das Urteil steht in fw_gesund_urteil() der Bibliothek, die
+ * Fakten sammelt fw_gesund_fakten() - NUR LESEND: kein Netz, kein Broker, kein Protokoll, keine Datei, keine
+ * Messung an einem Stick. Geurteilt wird ueber das ALTER, nie ueber eine einzelne Messung (Regeln/04 :809):
+ *   - keine eingeschaltete Zeile mit Namen -> 6 "nicht eingerichtet" (eine Neuinstallation ist kein Fehler);
+ *   - Aktualisierung laeuft (Marke juenger als 1 h) und kein Waechter -> 6;
+ *   - kein Waechter ("laeuft" = ein Prozess, dessen /proc/<pid>/cmdline funkwacht_dienst.py ist; die PID-Datei
+ *     allein genuegt nicht) -> 3; letzte Messung (stand.json) aelter als max(10 min, 3 x Takt) -> 3;
+ *   - Zeilen gestoert -> 4 (nur die Zahl); eine Zeile misst ueber MQTT, der Mithoerer laeuft nicht -> 4;
+ *   - MQTT an, aber kein Gateway mit UDP-Eingang oder kein Autostart -> 4; Gateway V2: Haken fehlen -> 4;
+ *     Befehle ueber MQTT an, Bruecke steht -> 4.
+ * Der Text nennt keine Stick- oder Dienstnamen, Pfade oder Zugangsdaten.
+ * Bis 1.0.16 gab es die Datei nicht, und healthcheck.pl uebersprang das Plugin.
+ * Aufruf wie LoxBerry: direkt, als loxberry, Eingabe aus /dev/null. postinstall.sh setzt 755.
+ * Kompatibel mit PHP 7.4 und PHP 8.x.
+ */
+
+error_reporting(E_ALL & ~E_DEPRECATED & ~E_NOTICE);
+ini_set('display_errors', '0');
+
+function fw_hc_antwort(array $a)
+{
+    $j = json_encode($a, JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE | JSON_INVALID_UTF8_SUBSTITUTE);
+    echo ($j !== false ? $j : '{"desc":"Funkwacht","status":0,"result":"unlesbar"}') . "\n";
+    exit(0);
+}
+
+$fw_hc_was = isset($argv[1]) ? strtolower((string) $argv[1]) : 'check';
+if ($fw_hc_was === 'title') {
+    fw_hc_antwort(array('desc' => 'Funkwacht'));
+}
+
+/* Die Bibliothek: liegt diese Datei unter .../bin/plugins/<ordner>, ist sie installiert, sonst im Archiv. */
+if (basename(dirname(__DIR__)) === 'plugins') {
+    $fw_hc_lib = dirname(dirname(dirname(__DIR__))) . '/webfrontend/html/plugins/' . basename(__DIR__) . '/fw_lib.php';
+} else {
+    $fw_hc_lib = dirname(__DIR__) . '/webfrontend/html/fw_lib.php';
+}
+if (!is_file($fw_hc_lib)) {
+    fw_hc_antwort(array('desc' => 'Funkwacht', 'status' => 3,
+        'result' => 'fw_lib.php nicht gefunden - das Plugin ist unvollstaendig installiert.'));
+}
+require_once $fw_hc_lib;
+
+$fw_hc_p = fw_paths();
+if ($fw_hc_p['home'] === '') {
+    /* Ohne LoxBerry-Wurzel wird nichts gelesen und nichts behauptet: 0 = unbekannt. */
+    fw_hc_antwort(array('desc' => 'Funkwacht', 'status' => 0,
+        'result' => 'Kein LoxBerry-Wurzelverzeichnis gefunden (ausgepacktes Archiv oder Pruefordner) - nichts geprueft.'));
+}
+// Die Sprache des LoxBerry, wenn der Aufrufer keine setzt (nur gelesen) - fuer die Zeile "Gateway V2".
+if (!getenv('LBLANG')) {
+    $fw_hc_gen = json_decode((string) @file_get_contents($fw_hc_p['home'] . '/config/system/general.json'), true);
+    if (isset($fw_hc_gen['Base']['Lang']) && is_string($fw_hc_gen['Base']['Lang'])) {
+        putenv('LBLANG=' . $fw_hc_gen['Base']['Lang']);
+    }
+}
+
+list($fw_hc_status, $fw_hc_text) = fw_gesund_urteil(fw_gesund_fakten(fw_config(false)));
+
+fw_hc_antwort(array(
+    'desc' => 'Funkwacht',
+    'status' => (int) $fw_hc_status,
+    'result' => (string) $fw_hc_text,
+    'url' => '/admin/plugins/' . $fw_hc_p['plugin'] . '/index.php',
+    'logfile' => $fw_hc_p['log'],
+));

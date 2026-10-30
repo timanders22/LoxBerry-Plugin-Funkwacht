@@ -176,6 +176,14 @@ DIENST_UID=$(id -u loxberry 2>/dev/null || id -u)
 # diese Schleife sechzig Mal in der Stunde ueber alle Prozesse des Systems.
 #
 # $1 = Prozessnummer, $2 = Skriptpfad, $3 = derselbe Pfad ueber readlink -f
+# Fehlerausgabe still (B8, Messung 30.10.2026): zwischen [ -r ] und dem
+# Lesen kann der Prozess enden. Dann scheitert das Oeffnen ("No such file
+# or directory") oder das Lesen ("read: read error: 0: No such process",
+# ESRCH aus /proc). Beides heisst nur "nicht der Dienst" - es fuellte aber
+# cron.err (am Geraet kam jede Zeile dort aus dieser Stelle). 2>/dev/null
+# steht VOR dem <, damit auch ein gescheitertes Oeffnen still bleibt; die
+# Antwort bleibt 1. Der Minutentakt ruft die Schleife ueber alle Prozesse.
+
 ist_dienst() {
     [ -r "/proc/$1/cmdline" ] || return 1
     {
@@ -198,7 +206,7 @@ ist_dienst() {
         fi
         IFS= read -r -d '' fw_a2 && return 1
         return 0
-    } < "/proc/$1/cmdline"
+    } 2>/dev/null < "/proc/$1/cmdline"
 }
 
 # Alle eigenen Prozesse eines der beiden Dienste, aufsteigend, ohne Dubletten.

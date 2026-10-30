@@ -20,3 +20,7 @@
 # binden es genauso ein.
 uhubctl
 python3-paho-mqtt
+#
+# mosquitto-clients (seit 1.0.17, Gruppe 44): die Befehlsbruecke (bin/befehlsbruecke.sh) liest mit
+# mosquitto_sub und quittiert mit mosquitto_pub.
+mosquitto-clients

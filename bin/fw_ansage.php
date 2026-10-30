@@ -10,6 +10,9 @@
  * Der Waechter ist in Python geschrieben; die Sprachausgabe gibt es nur in PHP (eine Stammfassung, ENTWURF
  * Abschnitt 4). Entschieden, gesprochen und protokolliert wird in fw_lib.php (fw_ansage_ausfuehren()).
  * Bauform: fw_notify.php. Der Waechter haelt NICHT an, wenn es nicht geht.
+ * Mit weiteren Ausgabezielen (seit 1.0.17, Stamm 1.2.1, Welle Mehrfach-Ziele) sprechen alle gleichzeitig, jedes
+ * hoechstens 'frist' = 20 s (fw_ansage_k()); die Zeile traegt dann zusaetzlich ;ZIELE=x/y - der Waechter wartet
+ * hoechstens 30 s (funkwacht_dienst.py, ansagen()) und wertet nur den Rueckgabewert aus (B5, B8).
  */
 
 error_reporting(E_ALL & ~E_DEPRECATED & ~E_NOTICE);

@@ -144,7 +144,24 @@ if [ -d "$PDATA" ] && mkdir -p "$NEU" 2>/dev/null; then
     # Mithoerers. Ohne sie galt ein stiller Stick nach jeder Aktualisierung
     # als "nie gesehen" - und "nie gesehen heilt nicht".
     # mqtt_altpraefix.json (S1): die Vormerkung abzuraeumender Praefixe.
-    for F in historie.json stand.json faehigkeit.json mqtt_stand.json mqtt_altpraefix.json; do
+    # Gruppe 44 (1.0.17): Bestandsaufnahme JEDER Datei, die Waechter (funkwacht_dienst.py), Mithoerer (fw_mqtt.py),
+    # dienst.sh, Oberflaeche (fw_lib.php, fw_test.php), Endpunkt, Befehlsbruecke und Sprachmodul in
+    # data/plugins/<ordner>/ schreiben (Probe P-U Teil A, Bericht Gruppe 44). Neu gerettet:
+    #   retain_dienstaussagen_geraeumt  Merker der einmaligen Altwert-Abraeumung (1.0.6) - sonst sieht der Waechter
+    #                                   nach jedem Update erneut am Broker nach (zweimal die Wartezeit, R26)
+    #   retain_sticks_geraeumt          Merker der Abraeumung geleerter Stick-Zeilen (1.0.7) - ebenso
+    #   ansage.json                     Wiederholsperre der Ansage (30 min je Anlass und Stick) - sonst kaeme eine
+    #                                   gerade gesprochene Ansage nach dem Update erneut
+    # Bewusst NICHT: auftraege.json (ein Auftrag von vor dem Update - quittieren, wartung, heilen - soll danach
+    # nicht mehr laufen; die Wartung selbst steht in historie.json), gleichwert.json (X-7, 60 s), einmalmeldung.json
+    # (120 s), dienst.pid und mithoerer.pid (Prozesse des alten Standes), token.lock und ansage.lock (Sperren),
+    # *.tmp.* (halbe Schriften), historie.json.kaputt (Befund des Augenblicks, liegt im alten Datenordner),
+    # bestand_zurueckgeholt (Merker von postinstall fuer postupgrade), <art>_letzte.json (Ergebnis der letzten Ansage
+    # fuer den Reiter Test), befehle/ (Zustand, Waechter und Sperren der Befehlsbruecke - laufzeitgebunden).
+    # Ausserhalb des Datenordners und vom Update nicht betroffen: Konfiguration und Zweitschrift (oben), das Token
+    # (in der Konfiguration), Protokolle (log/plugins/<ordner>/).
+    for F in historie.json stand.json faehigkeit.json mqtt_stand.json mqtt_altpraefix.json \
+             retain_dienstaussagen_geraeumt retain_sticks_geraeumt ansage.json; do
         [ -f "$PDATA/$F" ] || continue
         if cp -p "$PDATA/$F" "$NEU/$F" 2>/dev/null && cmp -s "$PDATA/$F" "$NEU/$F"; then
             GERETTET="$GERETTET $F"
@@ -192,6 +209,19 @@ rm -rf "$NEU" 2>/dev/null
 # gilt, was status mit 0 beantwortet ODER was eine Prozessnummer nennt: der
 # Waechter kann laufen, waehrend status wegen eines fehlenden Mithoerers 3
 # sagt.
+# Gruppe 44 (1.0.17): die Befehlsbruecke anhalten - der Waechter in cron.01min startet sie nach dem Update wieder,
+# wenn der Haken gesetzt ist. Die Marke .upgrade_laeuft (oben) haelt ihn bis dahin an.
+BBSH="$BASE/bin/plugins/$PFOLDER/befehlsbruecke.sh"
+if [ -f "$BBSH" ]; then
+    if bash "$BBSH" stop >/dev/null 2>&1; then
+        echo "<INFO> Befehlsbruecke angehalten (der Waechter startet sie nach dem Update, wenn der Haken gesetzt ist)."
+    else
+        echo "<INFO> Befehlsbruecke: stop meldete einen Fehler - sie lief vermutlich nicht."
+    fi
+else
+    echo "<INFO> Keine Befehlsbruecke installiert (Fassung vor 1.0.17) - nichts anzuhalten."
+fi
+
 DIENST="$BASE/bin/plugins/$PFOLDER/dienst.sh"
 if [ -x "$DIENST" ]; then
     LAGE=$("$DIENST" status 2>/dev/null); LAGE_RC=$?
