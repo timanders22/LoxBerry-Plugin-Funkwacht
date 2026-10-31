@@ -4,10 +4,14 @@
 Merkt, wenn ein Stick verstummt, weckt ihn in Stufen wieder auf — und misst
 nach, ob es geholfen hat.
 
-Version 1.0.17 · LoxBerry ab 3.0 · PHP 7.4 und 8.x · Python 3 mit paho-mqtt
+Version 1.0.18 · LoxBerry ab 3.0 · PHP 7.4 und 8.x · Python 3 mit paho-mqtt
 (Debian-Paket, über `dpkg/apt`)
 
 ---
+
+## Neu in 1.0.18
+
+Bilder der Einbindung erneuert: Die Seitenbilder zeigen jetzt die Musterprojekt-Seiten in der Hausform (MQTT-Gateway V2 und Befehlsbrücke statt der früheren HTTP-Vorlagen). Sonst keine Änderung gegen 1.0.17.
 
 ## Neu in 1.0.17
 
