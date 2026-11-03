@@ -50,7 +50,8 @@ return array(
                      'mqtt_ein'    => !empty($c['mqtt_ein']));
     },
     'protokoll' => function ($stufe, $text) {
-        fw_log('Befehlsbruecke (' . $stufe . '): ' . $text);
+        // 1.0.19: bb_log() setzt "Befehlsbruecke: " schon vor den Text - bis 1.0.18 stand es doppelt (Nachzug 01.11.2026, wie MGiSmart 1.1.30).
+        fw_log('(' . $stufe . ') ' . $text);
     },
     /* Die Zeilennummer des Sticks wie im Reiter Einstellungen (FW_GERAETE_MAX = 24). */
     'teile' => array('nr' => '[1-9]|1[0-9]|2[0-4]'),

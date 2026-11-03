@@ -121,6 +121,10 @@ function fw_eingaben_sammeln($form, array $falsch)
             $e['haken'][$n] = !empty($_POST[$n]);
         }
         /* Nr. 36 b: Felder und Anlaesse der Ansage - nie die Sprechtoken (ansage_x2_felder()). */
+        foreach (ansage_regeln_x2_felder() as $s2_k) {     // S2: Wann gesprochen wird
+            if ($s2_k === 'ansage_ruhe_ein') { $e['haken'][$s2_k] = isset($_POST[$s2_k]); }
+            elseif (isset($_POST[$s2_k])) { $e['werte'][$s2_k] = $str($_POST[$s2_k]); }
+        }
         foreach (ansage_x2_felder(array('modi' => fw_ansage_modi())) as $n) {
             if (substr($n, -9) === '_loeschen') { $e['haken'][$n] = !empty($_POST[$n]); }
             elseif (isset($_POST[$n])) { $e['werte'][$n] = $str($_POST[$n]); }
@@ -429,7 +433,8 @@ if ($fw_post && isset($_POST['speichern_geraete'])) {
     $fw_tbean = array();
     $fw_thinw = array();     // Welle Mehrfach-Ziele (Sprachmodul 1.2.1): Hinweise des Moduls, die das Speichern nicht verhindern
     $fw_tneu = ansage_formular_lesen($_POST, fw_tts($fw_cfg), $fw_tmangel, $fw_tbean,
-        array('modi' => fw_ansage_modi(), 'ziele' => fw_mit_zielen()), fw_ansage_k(), $fw_thinw);
+        array('modi' => fw_ansage_modi(), 'ziele' => fw_mit_zielen(), 'token_vor_ort' => true, 'aus_gewinnt' => true), fw_ansage_k(), $fw_thinw);
+    list($fw_cfg['ansage_regeln']) = ansage_regeln_formular($_POST, fw_ansage_regeln($fw_cfg), array(), $fw_tmangel, $fw_tbean, fw_ansage_k());     // S2: Wann gesprochen wird (Stamm)
     foreach ($fw_tmangel as $fw_tm) { $fw_fehler[] = $fw_tm['text']; }
     foreach ($fw_tbean as $fw_tb) { $fw_falsch[] = $fw_tb; }
     if (!$fw_tmangel) { $fw_cfg['tts'] = $fw_tneu; }
@@ -795,9 +800,9 @@ if ($fw_post && (isset($_POST['ansage_test']) || isset($_POST['ansage_test_ziel'
     if (isset($_POST['ansage_test_ziel']) && $fw_tnur === 0) {
         $fw_tr = array('stand' => 0, 'kennung' => 'ZIEL_UNBEKANNT|-', 'art' => '-', 'http' => 0, 'zeile' => '', 'zeichen' => 0);
     } elseif ($fw_tnur >= 1) {
-        $fw_tr = ansage_testansage(fw_tts(fw_config()), $fw_tk, $fw_tnur);
+        $fw_tr = ansage_testansage(fw_ansage_vor_ort(), $fw_tk, $fw_tnur);
     } else {
-        $fw_tr = ansage_testansage(fw_tts(fw_config()), $fw_tk);
+        $fw_tr = ansage_testansage(fw_ansage_vor_ort(), $fw_tk);
     }
     fw_log('Testansage' . ($fw_tnur >= 1 ? ' an Ziel ' . $fw_tnur : '') . ': ' . ansage_kurz($fw_tr));
     if ($fw_tr['stand'] === 1) {
@@ -1357,6 +1362,11 @@ if ($fw_dzeilen) {
     /* Welle Mehrfach-Ziele (Sprachmodul 1.2.1): Tabelle der weiteren Ausgabeziele; nach einer Beanstandung traegt sie das Eingetippte. */
     'ziele' => fw_mit_zielen(),
     'ziele_post' => fw_eingabe('settings') !== null ? fw_ziele_x2_post(fw_eingabe('settings')) : null), fw_ansage_k()); ?>
+<?= ansage_regeln_html(fw_ansage_regeln($fw_cfg), array(), array(), array(
+    'w' => function ($n, $g) { return fw_ew('settings', $n, $g); },
+    'm' => function ($n) { return fw_ek('settings', $n); },
+    'c' => function ($n, $g) { return fw_eh('settings', $n, $g); },
+    'token_vor_ort' => true), fw_ansage_k()) ?>
 
 <div class="sm-legende">
 <span><i class="sm-punkt sm-b-aktion"></i> <?= fw_t('LEGENDE.AKTION_SPEICHERN') ?></span>

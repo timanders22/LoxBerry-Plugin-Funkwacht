@@ -547,7 +547,7 @@ function fw_test_heilen($wert)
     if ($d === '') { return fw_t('TEST.M_KEIN_DIENST'); }
     $aus = array();
     @exec(escapeshellcmd(fw_python()) . ' ' . escapeshellarg($d)
-          . ' --heile ' . escapeshellarg((string) $wert) . ' 2>&1', $aus);
+          . ' --heile ' . fw_shell_arg((string) $wert) . ' 2>&1', $aus);
     fw_log('Heilversuch von Hand: ' . $wert);
     return implode("\n", $aus);
 }

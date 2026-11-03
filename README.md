@@ -4,10 +4,21 @@
 Merkt, wenn ein Stick verstummt, weckt ihn in Stufen wieder auf — und misst
 nach, ob es geholfen hat.
 
-Version 1.0.18 · LoxBerry ab 3.0 · PHP 7.4 und 8.x · Python 3 mit paho-mqtt
+Version 1.0.19 · LoxBerry ab 3.0 · PHP 7.4 und 8.x · Python 3 mit paho-mqtt
 (Debian-Paket, über `dpkg/apt`)
 
 ---
+
+## Neu in 1.0.19
+
+**Ab dieser Fassung sind die Sprachansagen ab Werk an, auch nach einem Update, wenn Sie die Ausgabeart nie gespeichert haben.** Eine gespeicherte Einstellung bleibt, wie sie ist, auch „aus“. **Ausschalten:** Reiter *Einstellungen*, Abschnitt Sprachausgabe, Ausgabeart **„aus“** wählen und speichern; das bleibt auch nach jedem weiteren Update aus.
+
+* **Was angesagt wird:** Stick gestört (dringend, also auch nachts) und wieder da (nur, wenn die Störung angesagt wurde), jeder Anlass mit eigenem Haken.
+* **Wohin:** ab Werk zugleich Loxone Music Server (braucht seine Adresse), Google-Lautsprecher über Chromecast4lox (braucht dort ein Standardgerät oder hier den Namen) und Amazon Echo über Alexa-NG. Ein Ziel, das nicht bereitsteht, wird ohne Fehler übergangen; der Reiter *Test* sagt, was ihm fehlt. Das Sprechtoken der beiden Plugins müssen Sie nicht abschreiben: Es wird übernommen, in der Konfiguration gespeichert und nachgezogen; ein von Hand eingetragenes bleibt.
+* **Wann nicht:** Nachtruhe 22 bis 7 Uhr (einstellbar, wird nicht nachgeholt; Dringendes spricht trotzdem), dieselbe Ansage höchstens einmal in 30 Minuten (einstellbar) und solange Loxone das retained MQTT-Thema `haus/ansage/ruhe` auf 1 setzt (das gilt auch für Dringendes). Die Testansage im Reiter *Test* spricht immer.
+* **Der Minutenlauf wartet nicht auf Lautsprecher:** Gesprochen wird in einem eigenen Vorgang.
+* **Berichtigt:** Die Zeilen der Befehlsbrücke im Protokoll tragen das Wort „Befehlsbruecke“ nur noch einmal.
+
 
 ## Neu in 1.0.18
 

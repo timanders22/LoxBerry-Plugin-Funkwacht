@@ -89,7 +89,9 @@ if (!in_array($fw_aktion, $fw_erlaubt, true)) {
  * ?selftest=1 - OHNE es auszuloesen. Damit laesst sich die Kette
  * Miniserver -> Adresse -> Wortzeichen pruefen, ohne dass dabei eine
  * Wartung beginnt oder eine Bremse faellt. */
-if (isset($_GET['selftest'])) {
+/* 1.0.19 (Nachzug 01.11.2026, wie Renault NG 2.1.23): !empty statt isset - bis 1.0.18 galt auch ?selftest=0 und ?selftest= als Selbsttest,
+ * und eine Adresse mit diesem Anhang tat nie etwas anderes. */
+if (!empty($_GET['selftest'])) {
     $fw_stand = fw_stand();
     echo "SELFTEST;OK=1\n";
     echo "AKTION=" . $fw_aktion . "\n";
