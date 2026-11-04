@@ -4,14 +4,19 @@
 Merkt, wenn ein Stick verstummt, weckt ihn in Stufen wieder auf — und misst
 nach, ob es geholfen hat.
 
-Version 1.0.19 · LoxBerry ab 3.0 · PHP 7.4 und 8.x · Python 3 mit paho-mqtt
+Version 1.0.20 · LoxBerry ab 3.0 · PHP 7.4 und 8.x · Python 3 mit paho-mqtt
 (Debian-Paket, über `dpkg/apt`)
 
 ---
 
+## Neu in 1.0.20
+
+* **Ansagen auch auf den offenen Dashboard-Tafeln, ab Werk an.** Mit Dashboard ab 0.9.40 und einer offenen Tafel kommt jede Ansage dieses Plugins auch dort an: Gong, Sprache und der Text groß. Ohne Dashboard oder ohne offene Tafel wird das Ziel ohne Fehler übergangen. Ausschalten: Reiter *Einstellungen*, Haken „Auch auf offenen Dashboard-Tafeln ansagen“; ein gespeichertes Aus bleibt. Es gelten dieselben Regeln wie für die Lautsprecher.
+* **Gemeinsame Sprachausgabe 1.4.0.** Einstellungen und ein gespeichertes Aus bleiben, wie sie sind; am Gerät ist nichts einzurichten.
+
 ## Neu in 1.0.19
 
-**Ab dieser Fassung sind die Sprachansagen ab Werk an, auch nach einem Update, wenn Sie die Ausgabeart nie gespeichert haben.** Eine gespeicherte Einstellung bleibt, wie sie ist, auch „aus“. **Ausschalten:** Reiter *Einstellungen*, Abschnitt Sprachausgabe, Ausgabeart **„aus“** wählen und speichern; das bleibt auch nach jedem weiteren Update aus.
+**Ab dieser Fassung sind die Sprachansagen ab Werk an, auch nach einem Update, wenn Sie die Ausgabeart nie gespeichert haben.** Eine gespeicherte Einstellung bleibt, wie sie ist, auch „aus“. **Ausschalten:** Reiter *Einstellungen*, Abschnitt Ansage bei Störung, Ausgabeart **„aus“** wählen und speichern; das bleibt auch nach jedem weiteren Update aus.
 
 * **Was angesagt wird:** Stick gestört (dringend, also auch nachts) und wieder da (nur, wenn die Störung angesagt wurde), jeder Anlass mit eigenem Haken.
 * **Wohin:** ab Werk zugleich Loxone Music Server (braucht seine Adresse), Google-Lautsprecher über Chromecast4lox (braucht dort ein Standardgerät oder hier den Namen) und Amazon Echo über Alexa-NG. Ein Ziel, das nicht bereitsteht, wird ohne Fehler übergangen; der Reiter *Test* sagt, was ihm fehlt. Das Sprechtoken der beiden Plugins müssen Sie nicht abschreiben: Es wird übernommen, in der Konfiguration gespeichert und nachgezogen; ein von Hand eingetragenes bleibt.
