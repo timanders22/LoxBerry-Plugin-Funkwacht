@@ -222,6 +222,7 @@ if ($fw_post && isset($_POST['vorlage'])) {
         $fw_misslungen[] = fw_t('LOX.FEHLER_VORLAGE');
         $fw_tab = (string) $_POST['vorlage'] === 'befehle' ? 'tab-mqtt' : 'tab-loxone';
     } else {
+        while (ob_get_level() > 0) { @ob_end_clean(); }
         header('Content-Type: application/x-download');
         // Anfuehrungszeichen um den Dateinamen: ohne sie bricht jeder Name
         // mit einem Leerzeichen darin.
@@ -238,6 +239,7 @@ if ($fw_post && isset($_POST['sichern'])) {
         $fw_misslungen[] = fw_t('SICH.FEHL');
         $fw_tab = 'tab-settings';
     } else {
+        while (ob_get_level() > 0) { @ob_end_clean(); }
         header('Content-Type: application/x-download');
         header('Content-Disposition: attachment; filename="' . $fw_name . '"');
         echo $fw_inhalt;
