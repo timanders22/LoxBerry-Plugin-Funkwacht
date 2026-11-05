@@ -2318,6 +2318,14 @@ def main():
     global laeuft
     argv = sys.argv[1:]
 
+    # 1.0.22 (K8a): ein unbekannter Schalter (Tippfehler --selbtest) startet nicht den Waechter. Wert nur hinter --heile.
+    erlaubt = ("--selbsttest", "--themen", "--faehigkeit", "--mqtt-leeren", "--trocken", "--heile", "--einmal")
+    fremd = [a for i, a in enumerate(argv) if a not in erlaubt and not (i > 0 and argv[i - 1] == "--heile")]
+    if fremd:
+        sys.stderr.write("FEHLER: unbekannter Schalter %s. Erlaubt sind: %s. Es wurde nichts gestartet.\n"
+                         % (", ".join(fremd), ", ".join(erlaubt)))
+        return 2
+
     if "--selbsttest" in argv:
         n, f, text = fw_pruef.selbsttest()
         n2, f2, zeilen = dienst_selbsttest()

@@ -121,8 +121,8 @@ function fw_eingaben_sammeln($form, array $falsch)
             $e['haken'][$n] = !empty($_POST[$n]);
         }
         /* Nr. 36 b: Felder und Anlaesse der Ansage - nie die Sprechtoken (ansage_x2_felder()). */
-        foreach (ansage_regeln_x2_felder() as $s2_k) {     // S2: Wann gesprochen wird
-            if ($s2_k === 'ansage_ruhe_ein') { $e['haken'][$s2_k] = isset($_POST[$s2_k]); }
+        foreach (array_merge(ansage_regeln_x2_felder(), array('ansage_tafel_ein', 'ansage_tafel_namen', 'ansage_homepod_ein', 'ansage_homepod_geraet')) as $s2_k) {     // S2: Wann gesprochen wird; 1.0.22: Tafel und HomePod dazu
+            if (in_array($s2_k, array('ansage_ruhe_ein', 'ansage_tafel_ein', 'ansage_homepod_ein'), true)) { $e['haken'][$s2_k] = isset($_POST[$s2_k]); }
             elseif (isset($_POST[$s2_k])) { $e['werte'][$s2_k] = $str($_POST[$s2_k]); }
         }
         foreach (ansage_x2_felder(array('modi' => fw_ansage_modi())) as $n) {
@@ -437,6 +437,8 @@ if ($fw_post && isset($_POST['speichern_geraete'])) {
     $fw_tneu = ansage_formular_lesen($_POST, fw_tts($fw_cfg), $fw_tmangel, $fw_tbean,
         array('modi' => fw_ansage_modi(), 'ziele' => fw_mit_zielen(), 'token_vor_ort' => true, 'aus_gewinnt' => true), fw_ansage_k(), $fw_thinw);
     list($fw_cfg['ansage_regeln']) = ansage_regeln_formular($_POST, fw_ansage_regeln($fw_cfg), array(), $fw_tmangel, $fw_tbean, fw_ansage_k());     // S2: Wann gesprochen wird (Stamm)
+    // 1.0.22: ein eingetipptes oder geloeschtes Sprechtoken ist nicht mehr vom Nachbarn; bis 1.0.21 ueberschrieb es der naechste Abgleich.
+    $fw_cfg['ansage_token_herkunft'] = ansage_token_herkunft_formular($_POST, isset($fw_cfg['ansage_token_herkunft']) ? $fw_cfg['ansage_token_herkunft'] : array());
     foreach ($fw_tmangel as $fw_tm) { $fw_fehler[] = $fw_tm['text']; }
     foreach ($fw_tbean as $fw_tb) { $fw_falsch[] = $fw_tb; }
     if (!$fw_tmangel) { $fw_cfg['tts'] = $fw_tneu; }

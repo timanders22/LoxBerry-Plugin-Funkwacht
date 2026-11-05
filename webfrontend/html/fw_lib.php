@@ -2220,6 +2220,10 @@ function fw_sicherung_lesen($roh)
         $fw_rg = '';
         $fw_rs = ansage_regeln_wert($d['ansage_regeln'], $fw_rg);
         unset($d['ansage_regeln']);
+        // 1.0.22: bis 1.0.21 stillschweigend uebergangen, die Datei galt als heil
+        if ($fw_rs === null) {
+            return array(0, fw_t('SICH.ABGEWIESEN'), array('config.ansage_regeln: ' . ansage_kennung_text($fw_rg !== '' ? $fw_rg : 'M_R_BLOCK', fw_ansage_k())));
+        }
     }
     /* Nr. 36 b (Stufe 2): eine Sicherung dieses Plugins traegt nie ein Sprechtoken - traegt die Datei
      * eines, wird sie abgewiesen; das geltende Token bleibt. */
