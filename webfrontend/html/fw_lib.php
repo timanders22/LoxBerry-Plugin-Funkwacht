@@ -497,7 +497,7 @@ function fw_config($erzeugen = true)
  * Zweitschrift erneuert. Bis 0.9.3 wurde kopiert; eine beschaedigte
  * Konfiguration riss die heile Sicherung mit.
  */
-function fw_config_speichern($cfg)
+function fw_config_speichern($cfg, $leere_objekte = false)
 {
     $p = fw_paths();
     if (!fw_json_schreiben($p['config'], $cfg, 0600)) { return false; }
@@ -507,10 +507,129 @@ function fw_config_speichern($cfg)
              . 'Die Zweitschrift bleibt unangetastet.');
         return false;
     }
+    // Nur aus fw_config_vervollstaendigen() (11.11.2026): die Zweitschrift entsteht aus der zurueckgelesenen Datei;
+    // ohne diesen Schritt kaeme ein leeres Objekt ({}) dort als [] an. Das Speichern im Formular ruft ohne Argument.
+    if ($leere_objekte) {
+        $zurueck = fw_json_leere_objekte($zurueck, json_decode((string) @file_get_contents($p['config'])));
+    }
     if (!fw_json_schreiben($p['sicherung'], $zurueck, 0600)) {
         fw_log('Die Zweitschrift liess sich nicht erneuern; die Konfiguration selbst ist geschrieben.');
     }
     return true;
+}
+
+/**
+ * Laeuft gerade eine Aktualisierung? Die Marke legt preupgrade.sh an,
+ * postupgrade.sh raeumt sie weg; aelter als 3600 s gilt sie nicht (dieselbe
+ * Rechnung wie fw_gesund_fakten(); bin/dienst.sh rechnet mit dem Inhalt).
+ */
+function fw_upgrade_laeuft()
+{
+    $p = fw_paths();
+    if ($p['datadir'] === '') { return false; }
+    $marke = $p['datadir'] . '.upgrade_laeuft';
+    clearstatcache(true, $marke);
+    return is_file($marke) && (time() - (int) @filemtime($marke)) < 3600;
+}
+
+/** Leere Objekte des Rohtextes ($o, json_decode ohne true) im Feld $a wieder als Objekt fuehren (11.11.2026),
+ *  damit json_encode() sie als {} und nicht als [] schreibt - oben wie verschachtelt, auch unter fremden
+ *  Schluesseln. Nur fuer fw_config_vervollstaendigen(); das Speichern im Formular bleibt, wie es ist.
+ *  Bauart Bewaesserung 0.9.56 (bw_json_leere_objekte()). */
+function fw_json_leere_objekte($a, $o)
+{
+    if (!is_array($a)) { return $a; }
+    if (is_object($o)) {
+        if (!get_object_vars($o) && $a === array()) { return new stdClass(); }
+        foreach ($a as $k => $v) {
+            $ks = (string) $k;
+            if (is_array($v) && property_exists($o, $ks)) { $a[$k] = fw_json_leere_objekte($v, $o->$ks); }
+        }
+    } elseif (is_array($o)) {
+        foreach ($a as $k => $v) {
+            if (is_array($v) && array_key_exists($k, $o)) { $a[$k] = fw_json_leere_objekte($v, $o[$k]); }
+        }
+    }
+    return $a;
+}
+
+/**
+ * Konfiguration vervollstaendigen (seit 1.0.25, Regeln/05 "Die Konfiguration
+ * wird vervollstaendigt, nicht nur ergaenzt"; Bauform Docker NG 1.3.7).
+ *
+ * Bis 1.0.24 ergaenzte fw_config() fehlende Schluessel bei jedem Lesen nur
+ * im Speicher; in funkwacht.json kamen sie erst mit dem naechsten Speichern
+ * im Formular. Aufgerufen ueber bin/fw_vervollstaendigen.php vom Waechter
+ * beim Start (funkwacht_dienst.py, vor dem ersten Lesen der Konfiguration)
+ * und von postupgrade.sh nach dem Wegraeumen der Marke.
+ *
+ * - Nur mit LoxBerry-Wurzel, nicht waehrend einer Aktualisierung (Marke).
+ * - Nur, wenn funkwacht.json lesbar ist, ein Objekt ist und ein gueltiges,
+ *   nicht leeres Aktionstoken traegt (fw_token_gueltig(), dasselbe Merkmal,
+ *   das der Endpunkt verlangt). postinstall.sh legt "{}" an, und
+ *   fw_config_speichern() ueberschreibt die Zweitschrift immer: ohne diese
+ *   Bedingung ersetzte das Vervollstaendigen eine Zweitschrift mit Token
+ *   durch eine ohne. Eine fehlende oder kaputte Datei ist Sache der
+ *   Selbstheilung in fw_config().
+ * - Geschrieben werden die WERTE AUS DER DATEI, nicht die von fw_config()
+ *   begrenzten; fremde Schluessel bleiben stehen. Fehlende Schluessel
+ *   bekommen den Wert, den fw_config() fuer sie liest - das ist hier die
+ *   Vorgabe, denn fw_config() kennt keine Lese-Regel fuer Bestandsdateien
+ *   (endpunkt_ein = 1 fuer den Bestand setzt allein postinstall.sh beim
+ *   Update, Gruppe 44; das laeuft vorher, mit Marke ruht diese Funktion).
+ * - Nur die Schluessel der Vorgaben (die schreibt auch das Speichern), nur
+ *   oberste Ebene, nur wenn einer fehlt - damit bleibt es bei einem
+ *   Schreibvorgang.
+ * - Geschrieben wird ueber fw_config_speichern() (0600, Zweitschrift wie
+ *   beim Speichern). Genau eine Protokollzeile mit den Namen, nie Werte.
+ *
+ * Rueckgabe: array('stand' => ohne_wurzel|ruht|ohne_datei|ohne_merkwort
+ *                  |vollstaendig|ergaenzt|fehler, 'schluessel' => array(...))
+ */
+function fw_config_vervollstaendigen()
+{
+    $p = fw_paths();
+    if ($p['config'] === '') {
+        return array('stand' => 'ohne_wurzel', 'schluessel' => array());
+    }
+    if (fw_upgrade_laeuft()) {
+        return array('stand' => 'ruht', 'schluessel' => array());
+    }
+    clearstatcache(true, $p['config']);
+    if (!is_file($p['config'])) {
+        return array('stand' => 'ohne_datei', 'schluessel' => array());
+    }
+    list($datei, $zustand) = fw_json_lesen_geprueft($p['config']);
+    if ($zustand !== 'ok' || !is_array($datei) || !array_key_exists('aktionstoken', $datei)
+        || !fw_token_gueltig($datei['aktionstoken'])) {
+        return array('stand' => 'ohne_merkwort', 'schluessel' => array());
+    }
+    // Ein leeres Objekt der Datei ({}) bliebe nach json_decode(..., true) ein leeres Feld und kaeme beim
+    // Schreiben als [] zurueck - der Rohwert wird erhalten, bevor ergaenzt wird (11.11.2026).
+    $datei = fw_json_leere_objekte($datei, json_decode((string) @file_get_contents($p['config'])));
+    $fehlend = array();
+    foreach (fw_vorgaben() as $k => $w) {
+        /* endpunkt_ein bleibt aussen vor (11.11.2026): den Uebergang fuer Bestandsanlagen setzt das
+         * Update; ein hier festgeschriebenes "aus" koennte ein spaeteres Update nicht mehr berichtigen. */
+        if ($k === 'endpunkt_ein') {
+            continue;
+        }
+        if (!array_key_exists($k, $datei)) {
+            $datei[$k] = $w;
+            $fehlend[] = $k;
+        }
+    }
+    if (!$fehlend) {
+        return array('stand' => 'vollstaendig', 'schluessel' => array());
+    }
+    if (!fw_config_speichern($datei, true)) {
+        fw_log('Konfiguration NICHT vervollstaendigt: funkwacht.json liess sich nicht schreiben ('
+             . count($fehlend) . ' fehlende Schluessel).');
+        return array('stand' => 'fehler', 'schluessel' => $fehlend);
+    }
+    fw_log('Konfiguration vervollstaendigt - ' . count($fehlend)
+         . ' fehlende Vorgaben in funkwacht.json geschrieben: ' . implode(', ', $fehlend));
+    return array('stand' => 'ergaenzt', 'schluessel' => $fehlend);
 }
 
 /**

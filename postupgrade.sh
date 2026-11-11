@@ -92,6 +92,33 @@ if [ -f "$MARKE" ]; then
     fi
 fi
 
+# ---------- Konfiguration vervollstaendigen (1.0.25, Regeln/05) ----------
+# Fehlende Vorgaben werden einmal in funkwacht.json eingetragen - ueber
+# fw_lib.php, den einzigen Schreiber der Datei (bin/fw_vervollstaendigen.php).
+# HIER, nach dem Wegraeumen der Marke: mit Marke ruht das Vervollstaendigen,
+# und der Waechter, den postinstall.sh gestartet hat, hat es deshalb
+# ausgelassen; er liest die Datei in jedem Durchlauf neu. Geschrieben wird
+# nur in eine Datei mit Aktionstoken, nur wenn etwas fehlt; dieses Skript
+# laeuft als loxberry (Regeln/06), Eigentuemer und Rechte 0600 bleiben.
+# "cd /": der Handstart aus einem fremden Heimverzeichnis (Regeln/06).
+FW_VV="$BASE/bin/plugins/$PFOLDER/fw_vervollstaendigen.php"
+if [ -f "$BASE/config/plugins/$PFOLDER/funkwacht.json" ] && [ -f "$FW_VV" ]; then
+    if command -v php >/dev/null 2>&1; then
+        FW_VV_ZEILE=$(cd / && LBHOMEDIR="$BASE" LBPPLUGINDIR="$PFOLDER" php "$FW_VV" "$PFOLDER" 2>&1 | tail -1)
+        case "$FW_VV_ZEILE" in
+            *";STAND=ergaenzt;"*)      echo "<OK> Konfiguration vervollstaendigt: ${FW_VV_ZEILE#*SCHLUESSEL=}" ;;
+            *";STAND=vollstaendig;"*)  echo "<OK> Konfiguration vollstaendig, nichts ergaenzt." ;;
+            *";STAND=ohne_merkwort;"*|*";STAND=ohne_datei;"*)
+                echo "<INFO> Konfiguration nicht vervollstaendigt (noch nie gespeichert oder ohne Aktionstoken) -"
+                echo "<INFO> das Speichern im Formular schreibt sie vollstaendig." ;;
+            *";STAND=ruht;"*)          echo "<INFO> Konfiguration nicht vervollstaendigt: die Marke der Aktualisierung liegt noch. Der Waechter holt es beim naechsten Start nach." ;;
+            *) echo "<WARNING> Konfiguration nicht vervollstaendigt: ${FW_VV_ZEILE:-keine Ausgabe}. Der Waechter versucht es beim naechsten Start erneut." ;;
+        esac
+    else
+        echo "<WARNING> Konfiguration nicht vervollstaendigt: php wurde nicht gefunden."
+    fi
+fi
+
 echo "<OK> postupgrade abgeschlossen - beim naechsten Durchlauf wird frisch gemessen."
 # I4 (Pruefung 29.09.2026): die Schlusszeile nur nach NACHGESEHENEM
 # Zurueckholen - postinstall.sh legt den Merker erst an, wenn jede Datei

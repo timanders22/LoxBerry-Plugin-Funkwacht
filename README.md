@@ -4,10 +4,18 @@
 Merkt, wenn ein Stick verstummt, weckt ihn in Stufen wieder auf — und misst
 nach, ob es geholfen hat.
 
-Version 1.0.24 · LoxBerry ab 3.0 · PHP 7.4 und 8.x · Python 3 mit paho-mqtt
+Version 1.0.25 · LoxBerry ab 3.0 · PHP 7.4 und 8.x · Python 3 mit paho-mqtt
 (Debian-Paket, über `dpkg/apt`)
 
 ---
+
+## Neu in 1.0.25
+
+- **Konfiguration wird vervollständigt.** Fehlen in `funkwacht.json` Einstellungen, die eine spätere Fassung eingeführt hat, trägt das Plugin sie jetzt einmal mit ihrer Vorgabe in die Datei ein – beim Start des Wächters und am Ende einer Aktualisierung (`postupgrade.sh`). Bis 1.0.24 ergänzte es sie nur beim Lesen im Speicher; in der Datei standen sie erst nach dem nächsten Speichern im Formular. Die Einstellungen, mit denen das Plugin arbeitet, ändern sich dadurch nicht: eingetragen wird genau der Wert, der schon bisher galt.
+- Geschrieben wird nur in eine Datei mit gültigem Aktionstoken, nur wenn wirklich etwas fehlt, nicht während einer Aktualisierung und mit denselben Rechten (0600) und derselben Zweitschrift wie beim Speichern. Vorhandene Werte bleiben wörtlich stehen, auch unbekannte Schlüssel. Das Protokoll nennt die Namen der eingetragenen Einstellungen, nie ihre Werte.
+- Geprüft auf dem Arbeitsplatz unter PHP 7.4 und 8.4 mit einem Prüfstand in nachgebildeter Gerätegestalt; am LoxBerry noch nicht gemessen.
+- `endpunkt_ein` trägt das Vervollständigen nicht ein: den Übergang einer bestehenden Anlage setzt weiter allein die Aktualisierung, und ein hier festgeschriebenes „aus“ könnte eine spätere Aktualisierung nicht mehr berichtigen.
+- Leere Objekte (`{}`) in der Datei bleiben beim Vervollständigen erhalten, auch verschachtelte und solche unter unbekannten Schlüsseln; sie werden dabei nicht mehr zu leeren Listen (`[]`). Das Speichern im Formular bleibt, wie es war.
 
 ## Neu in 1.0.24
 

@@ -2314,6 +2314,27 @@ def dienst_selbsttest():
 # Aufruf
 # ======================================================================
 
+def konfiguration_vervollstaendigen():
+    """Seit 1.0.25 (Regeln/05): fehlende Vorgaben einmal in funkwacht.json schreiben - beim Start.
+
+    Geschrieben wird ueber bin/fw_vervollstaendigen.php und damit ueber fw_lib.php, nicht von hier:
+    der Waechter schreibt die Konfiguration nie selbst (ein Schreiber fuer die Datei). Die PHP-Seite
+    entscheidet (Aktionstoken, Marke der Aktualisierung) und schreibt die Protokollzeile mit den
+    Namen; hier steht nur der Aufruf. Scheitert er, steht das einmal im Protokoll, und der Waechter
+    laeuft mit den Vorgaben im Speicher weiter wie bis 1.0.24.
+    Rueckgabe: die Ausgabezeile des Skripts oder "" (fuer die Pruefung)."""
+    helfer = os.path.join(os.path.dirname(os.path.abspath(__file__)), "fw_vervollstaendigen.php")
+    if not os.path.isfile(helfer):
+        return ""
+    rc, aus = befehl(["php", helfer, pfade()["plugin"]], 30)
+    zeilen = [z for z in aus.splitlines() if z.startswith("VERVOLLSTAENDIGEN;")]
+    zeile = zeilen[-1] if zeilen else ""
+    if rc != 0 or not zeile:
+        log("Konfiguration nicht vervollstaendigt: Aufruf von fw_vervollstaendigen.php mit Rueckgabe %d (%s)"
+            % (rc, (zeile or aus.strip())[:160]), "vervollstaendigen")
+    return zeile
+
+
 def main():
     global laeuft
     argv = sys.argv[1:]
@@ -2427,6 +2448,8 @@ def main():
     p = pfade()
     letzte_tabu = None
     einmal = "--einmal" in argv
+    # 1.0.25 (Regeln/05): fehlende Vorgaben einmal in funkwacht.json schreiben - vor dem ersten Lesen der Konfiguration.
+    konfiguration_vervollstaendigen()
     while laeuft:
         cfg = config()
         tabu = systemgeraete()
