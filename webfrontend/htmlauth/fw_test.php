@@ -455,7 +455,11 @@ function fw_test_selbstpruefung()
         $ohne ? sprintf(fw_klartext('TEST.P_HEBEL_OHNE'), implode(', ', $ohne))
               : fw_klartext('TEST.P_HEBEL_OK'));
 
-    /* 14. Ist die erzeugte Vorlage wohlgeformt? Beide. */
+    /* 14. Ist die erzeugte Vorlage wohlgeformt? Beide. 1.0.26: SimpleXML steht nicht in dpkg/apt (Regeln/03) -
+     * ohne die Erweiterung sagt die Zeile "nicht feststellbar", statt den Reiter abzubrechen. */
+    if (!function_exists('simplexml_load_string') || !function_exists('libxml_use_internal_errors')) {
+        $o[] = fw_pruefzeile(fw_klartext('TEST.P_F_VORLAGE'), null, fw_klartext('ALLG.UNBEKANNT') . ' (SimpleXML)');
+    } else {
     $vorher = libxml_use_internal_errors(true);
     list($vn, $vx) = fw_vorlage();
     $sx = simplexml_load_string($vx);
@@ -468,6 +472,7 @@ function fw_test_selbstpruefung()
             ? sprintf(fw_klartext('TEST.P_VORLAGE_OK'), count($sx->children()),
                       count($sq->children()))
             : fw_klartext('TEST.P_VORLAGE_FEHL'));
+    }
 
     /* 15. Steht gerade eine Sperre? Das ist kein Fehler, aber es erklaert,
      *     warum nichts geschieht - und genau danach sucht man sonst lange. */

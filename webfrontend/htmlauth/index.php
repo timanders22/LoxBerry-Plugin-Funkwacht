@@ -592,7 +592,10 @@ if ($fw_post && isset($_POST['speichern_mqtt'])) {
         if ($w !== null) { $fw_cfg[$fw_k] = $w; }
     }
     $fw_bp = isset($_POST['broker_port']) && is_string($_POST['broker_port']) ? trim($_POST['broker_port']) : '';
-    if ($fw_bp !== '' && (!ctype_digit($fw_bp) || (int) $fw_bp < 1 || (int) $fw_bp > 65535)) {
+    /* 1.0.26: dieselbe Regel wie beim Zurueckspielen (fw_einstellung_pruefen(): 1 bis 5 Ziffern, 1..65535) und
+     * ohne die Ziffernpruefung aus ctype (nicht in dpkg/apt, Regeln/03). Bis 1.0.25 nahm das Formular z. B. 000080
+     * an, und die eigene Sicherung liess sich danach nicht zurueckspielen. */
+    if ($fw_bp !== '' && (!preg_match('/^[0-9]{1,5}\z/', $fw_bp) || (int) $fw_bp < 1 || (int) $fw_bp > 65535)) {
         $fw_fehler[] = sprintf(fw_t('FEHLER.BROKER_PORT'), $fw_bp);
         $fw_falsch[] = 'broker_port';
     } else {

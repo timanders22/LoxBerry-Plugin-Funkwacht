@@ -4,10 +4,17 @@
 Merkt, wenn ein Stick verstummt, weckt ihn in Stufen wieder auf — und misst
 nach, ob es geholfen hat.
 
-Version 1.0.25 · LoxBerry ab 3.0 · PHP 7.4 und 8.x · Python 3 mit paho-mqtt
+Version 1.0.26 · LoxBerry ab 3.0 · PHP 7.4 und 8.x · Python 3 mit paho-mqtt
 (Debian-Paket, über `dpkg/apt`)
 
 ---
+
+## Neu in 1.0.26
+
+- **Broker-Anschluss im Reiter MQTT:** Das Formular prüft den Anschluss jetzt mit derselben Regel wie das Zurückspielen einer Sicherung: ein bis fünf Ziffern, 1 bis 65535, oder leer. Bis 1.0.25 nahm es auch Werte mit führenden Nullen über fünf Ziffern an (etwa `000080`); die eigene Sicherung ließ sich danach nicht mehr zurückspielen. Ein so gespeicherter Wert bleibt stehen, bis der Reiter *MQTT* das nächste Mal gespeichert wird; dann meldet das Formular ihn und verlangt eine Berichtigung. Die Prüfung braucht die PHP-Erweiterung ctype nicht mehr; sie steht nicht in `dpkg/apt`, und ohne sie brach das Speichern ab.
+- **Sicherung zurückspielen:** Ein MQTT-Thema, eine Uhrzeit der Ruhezeit, die SignalBot-Adresse oder ein Broker-Anschluss mit einem Zeilenumbruch am Ende wird jetzt abgewiesen. Bis 1.0.25 nahm das Zurückspielen einen solchen Wert an und speicherte ihn samt Umbruch; der Wächter hätte das Thema mit dem Umbruch benutzt. Eine Sicherung, die das Plugin selbst geschrieben hat, trägt keinen solchen Wert.
+- **Reiter Test ohne SimpleXML:** Fehlt die PHP-Erweiterung SimpleXML, sagt die Prüfzeile „Vorlage wohlgeformt“ jetzt „nicht feststellbar“, statt den Reiter abzubrechen.
+- Am gemessenen LoxBerry sind ctype und SimpleXML geladen; dort ändert sich nur die Prüfung des Broker-Anschlusses. Gemessen auf dem Arbeitsrechner unter PHP 7.4 und 8.4, nicht am Gerät.
 
 ## Neu in 1.0.25
 

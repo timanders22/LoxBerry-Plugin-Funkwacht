@@ -2107,19 +2107,21 @@ function fw_einstellung_pruefen($k, $w)
     if ($k === 'broker_port' && is_int($w)) { $w = (string) $w; }
     if (!is_string($w)) { return array(sprintf(fw_t('SICH.W_TEXT'), $wo)); }
     if ($k === 'mqtt_topic') {
-        return (preg_match('#^[a-z0-9_\-/]+$#', $w) && trim($w, '/') === $w)
+        /* 1.0.26: \z statt $ (Regeln/05) - $ liess einen Zeilenumbruch am Ende durch, und das Zurueckspielen
+         * speicherte ihn roh; gilt ebenso fuer Uhrzeit, Adresse und Anschluss darunter. */
+        return (preg_match('#^[a-z0-9_\-/]+\z#', $w) && trim($w, '/') === $w)
             ? array() : array(sprintf(fw_t('SICH.W_THEMA'), $wo));
     }
     if ($k === 'ruhe_von' || $k === 'ruhe_bis') {
-        return ($w === '' || preg_match('/^([01][0-9]|2[0-3]):[0-5][0-9]$/', $w))
+        return ($w === '' || preg_match('/^([01][0-9]|2[0-3]):[0-5][0-9]\z/', $w))
             ? array() : array(sprintf(fw_t('SICH.W_UHRZEIT'), $wo));
     }
     if ($k === 'signal_url') {
-        return ($w === '' || preg_match('#^https?://[^\s"\']+$#', $w))
+        return ($w === '' || preg_match('#^https?://[^\s"\']+\z#', $w))
             ? array() : array(sprintf(fw_t('SICH.W_ADRESSE'), $wo));
     }
     if ($k === 'broker_port') {
-        return ($w === '' || (preg_match('/^[0-9]{1,5}$/', $w) && (int) $w >= 1 && (int) $w <= 65535))
+        return ($w === '' || (preg_match('/^[0-9]{1,5}\z/', $w) && (int) $w >= 1 && (int) $w <= 65535))
             ? array() : array(sprintf(fw_t('SICH.W_PORT'), $wo));
     }
     if ($k === 'broker_pass') {
