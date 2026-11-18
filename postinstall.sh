@@ -122,7 +122,7 @@ BEST="$BASE/data/plugins/$PFOLDER.bestand"
 if [ "$MARKE_FRISCH" != "1" ]; then
     FW_BEISEITE=""
     FW_NICHT=""
-    for FW_Q in "$BK" "$BEST"; do
+    for FW_Q in "$BK" "$BEST" "$BASE/config/plugins/$PFOLDER.backup.zugang.json"; do
         [ -e "$FW_Q" ] || [ -L "$FW_Q" ] || continue
         rm -rf "$FW_Q.alt" 2>/dev/null
         if mv -f "$FW_Q" "$FW_Q.alt" 2>/dev/null && [ ! -e "$FW_Q" ] && [ -e "$FW_Q.alt" ]; then
@@ -150,6 +150,23 @@ if [ "$MARKE_FRISCH" = "1" ] && [ -f "$BK" ]; then
             chmod 600 "$CF" "$BK" 2>/dev/null
             echo "<OK> Konfiguration aus Sicherung wiederhergestellt."
         fi
+    fi
+fi
+
+# 1.0.27: das Broker-Kennwort (zugang.json, 0600) aus seiner Zweitschrift - nur bei einer Aktualisierung (S1),
+# nur wenn zugang.json fehlt (der Installer raeumt config/plugins/<ordner>/ ab). Gemessen wird die Wirkung
+# (cmp), die Rechte werden NACH dem Kopieren gesetzt (Regeln/06). Ohne Zweitschrift (Aktualisierung von 1.0.26):
+# das Kennwort steht noch in funkwacht.json, postupgrade.sh uebernimmt es.
+ZG="$PCONFIG/zugang.json"
+ZGB="$BASE/config/plugins/$PFOLDER.backup.zugang.json"
+if [ "$MARKE_FRISCH" = "1" ] && [ -f "$ZGB" ] && [ ! -e "$ZG" ]; then
+    if cp -p "$ZGB" "$ZG" 2>/dev/null && cmp -s "$ZGB" "$ZG"; then
+        chmod 600 "$ZG" "$ZGB" 2>/dev/null
+        echo "<OK> Broker-Kennwort (zugang.json) aus der Zweitschrift wiederhergestellt."
+    else
+        rm -f "$ZG" 2>/dev/null
+        echo "<WARNING> zugang.json liess sich nicht aus der Zweitschrift wiederherstellen; die Oberflaeche holt es"
+        echo "<WARNING> beim naechsten Aufruf nach, der Mithoerer liest bis dahin die Zweitschrift."
     fi
 fi
 

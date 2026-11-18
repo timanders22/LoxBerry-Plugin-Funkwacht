@@ -57,7 +57,7 @@ BK="$BASE/config/plugins/$PFOLDER.backup.json"
 BEST="$BASE/data/plugins/$PFOLDER.bestand"
 BEISEITE=""
 FEST=""
-for ZIEL in "$BK" "$BEST"; do
+for ZIEL in "$BK" "$BEST" "$BASE/config/plugins/$PFOLDER.backup.zugang.json"; do
     if [ -e "$ZIEL" ] || [ -L "$ZIEL" ]; then
         rm -rf "${ZIEL:?}.alt" 2>/dev/null
         if mv -f "$ZIEL" "$ZIEL.alt" 2>/dev/null && [ ! -e "$ZIEL" ]; then
@@ -68,6 +68,9 @@ for ZIEL in "$BK" "$BEST"; do
     fi
 done
 [ -f "$BK.alt" ] && [ ! -L "$BK.alt" ] && chmod 600 "$BK.alt" 2>/dev/null
+# 1.0.27: ebenso die Zweitschrift des Broker-Kennworts (zugang.json).
+[ -f "$BASE/config/plugins/$PFOLDER.backup.zugang.json.alt" ] && [ ! -L "$BASE/config/plugins/$PFOLDER.backup.zugang.json.alt" ] \
+    && chmod 600 "$BASE/config/plugins/$PFOLDER.backup.zugang.json.alt" 2>/dev/null
 
 if [ -n "$BEISEITE" ] || [ -n "$FEST" ]; then
     FW_TEXT="<WARNING> Neuinstallation: Einstellungen einer frueheren Installation werden NICHT eingespielt."

@@ -442,6 +442,26 @@ function fw_test_selbstpruefung()
             ? sprintf(fw_klartext('TEST.P_ZWEITSCHRIFT_OK'), basename($p['sicherung']))
             : fw_klartext('TEST.P_ZWEITSCHRIFT_FEHLT'));
 
+    /* 12b. 1.0.27: Liegt das Broker-Kennwort in seiner eigenen Datei (Entscheidung des Hausherrn 18.11.2026)? Gruen:
+     * funkwacht.json traegt kein broker_pass mehr, und zugang.json ist - wenn es sie gibt - lesbar, traegt die Rechte
+     * 0600 und hat ihre Zweitschrift neben dem Konfigordner. Gelesen wird nur, ob ein Kennwort da ist, nie welches. */
+    list($fw_zk, $fw_zz) = fw_json_lesen_geprueft($p['config']);
+    list(, $fw_zl) = fw_zugang_lesen(false);
+    if ($fw_zz === 'ok' && array_key_exists('broker_pass', $fw_zk)) {
+        $o[] = fw_pruefzeile(fw_klartext('TEST.P_F_ZUGANG'), false, fw_klartext('TEST.P_ZUGANG_ALT'));
+    } elseif ($p['zugang'] === '' || !is_file($p['zugang'])) {
+        $o[] = fw_pruefzeile(fw_klartext('TEST.P_F_ZUGANG'), true, fw_klartext('TEST.P_ZUGANG_KEINE'));
+    } elseif ($fw_zl !== 'ok') {
+        $o[] = fw_pruefzeile(fw_klartext('TEST.P_F_ZUGANG'), false, fw_klartext('TEST.P_ZUGANG_KAPUTT'));
+    } else {
+        clearstatcache(true, $p['zugang']);
+        $fw_zr = ((int) @fileperms($p['zugang'])) & 0777;
+        $fw_zs = is_file($p['zugang_sicherung']);
+        $o[] = fw_pruefzeile(fw_klartext('TEST.P_F_ZUGANG'), ($fw_zr === 0600 && $fw_zs),
+            sprintf(fw_klartext('TEST.P_ZUGANG_OK'), sprintf('%04o', $fw_zr),
+                    fw_klartext($fw_zs ? 'ALLG.JA' : 'ALLG.NEIN')));
+    }
+
     /* 13. Traegt jeder Stick einen Hebel, mit dem geheilt werden kann? */
     $ohne = array();
     foreach (fw_geraete() as $nr => $g) {

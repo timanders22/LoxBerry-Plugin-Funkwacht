@@ -176,7 +176,7 @@ def pfade() -> dict:
     if not home or not ordner:
         # Ohne gelesene Wurzel oder Ordnernamen: KEINE Pfade (wie im Waechter).
         return {"home": "", "config": "", "data": "", "stand": "", "log": "",
-                "general": ""}
+                "general": "", "zugang": "", "zugang_sicherung": ""}
     data = os.path.join(home, "data", "plugins", ordner)
     return {
         "home": home,
@@ -185,6 +185,9 @@ def pfade() -> dict:
         "stand": os.path.join(data, "mqtt_stand.json"),
         "log": os.path.join(home, "log", "plugins", ordner, "funkwacht.log"),
         "general": os.path.join(home, "config", "system", "general.json"),
+        # 1.0.27: das Broker-Kennwort in einer eigenen Datei 0600 und ihre Zweitschrift neben dem Konfigordner.
+        "zugang": os.path.join(home, "config", "plugins", ordner, "zugang.json"),
+        "zugang_sicherung": os.path.join(home, "config", "plugins", ordner + ".backup.zugang.json"),
     }
 
 
@@ -207,6 +210,31 @@ def log(zeile):
                     % (time.strftime("%Y-%m-%d %H:%M:%S"), zeile))
     except Exception:
         pass
+
+
+def kennwort_lesen(c: dict) -> str:
+    """Das eigene Broker-Kennwort (seit 1.0.27, Entscheidung des Hausherrn 18.11.2026): aus zugang.json (0600).
+
+    Dieselbe Reihenfolge wie fw_broker_pass() in fw_lib.php: liegt zugang.json da, gilt sie - eine unlesbare Datei
+    oder eine ohne Kennwort ergibt "" (dann gilt wie bei leerem Feld das Kennwort des LoxBerry; der Reiter Test zeigt
+    sie rot). Fehlt sie, gilt ihre Zweitschrift neben dem Konfigordner, sonst - solange der Uebergang aussteht -
+    broker_pass aus funkwacht.json. Das Kennwort wird nie protokolliert und nie veraendert (U7).
+    """
+    p = pfade()
+    z = p.get("zugang") or ""
+    if z and os.path.exists(z):
+        w = json_lesen(z, {}).get("broker_pass")
+        if isinstance(w, str):
+            return w
+        log("zugang.json ist unlesbar oder traegt kein Kennwort - es gilt das Kennwort des LoxBerry.")
+        return ""
+    zs = p.get("zugang_sicherung") or ""
+    if zs and os.path.isfile(zs):
+        w = json_lesen(zs, {}).get("broker_pass")
+        if isinstance(w, str):
+            return w
+    w = c.get("broker_pass")
+    return w if isinstance(w, str) else ""
 
 
 def zugang() -> dict:
@@ -238,7 +266,8 @@ def zugang() -> dict:
         "user": str(c.get("broker_user") or "").strip() or aus_lb("Brokeruser", "brokeruser"),
         # U7 (Pruefung 29.09.2026): ein Kennwort wird nicht veraendert, auch
         # nicht um Leerzeichen am Rand gekuerzt.
-        "pass": str(c.get("broker_pass") or "") or aus_lb("Brokerpass", "brokerpass"),
+        # 1.0.27: aus zugang.json (kennwort_lesen()); bis 1.0.26 broker_pass in funkwacht.json.
+        "pass": kennwort_lesen(c) or aus_lb("Brokerpass", "brokerpass"),
         "kennung": (str(c.get("broker_id") or "").strip() or "funkwacht-%d" % os.getpid())[:60],
     }
 

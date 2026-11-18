@@ -134,6 +134,27 @@ if [ -f "$CF" ]; then
     fi
 fi
 
+# 1.0.27 (Entscheidung des Hausherrn 18.11.2026): das Broker-Kennwort steht in zugang.json (0600). Dieselbe
+# Bauart wie oben: zur Zweitschrift wird nur ein lesbares JSON-Objekt mit dem Kennwort als Text, gebaut unter
+# .neu.<pid>, verglichen, dann umbenannt; ein Fehlschlag bricht die Aktualisierung ab (zs_schluss), denn der
+# Purge loescht das Original. postinstall.sh holt sie zurueck, postupgrade.sh sieht nach. Vor 1.0.27 gibt es
+# die Datei nicht; dann steht das Kennwort noch in funkwacht.json und ist mit ihr gesichert.
+ZG="$BASE/config/plugins/$PFOLDER/zugang.json"
+ZGB="$BASE/config/plugins/$PFOLDER.backup.zugang.json"
+if [ -f "$ZG" ]; then
+    if python3 -c 'import json,sys; d=json.load(open(sys.argv[1],encoding="utf-8")); sys.exit(0 if isinstance(d,dict) and isinstance(d.get("broker_pass"),str) else 1)' "$ZG" 2>/dev/null; then
+        if zs_hinlegen "$ZG" "$ZGB"; then
+            echo "<OK> Broker-Kennwort (zugang.json) gesichert."
+        else
+            echo "<WARNING> zugang.json liess sich nicht sichern - die bisherige Zweitschrift bleibt unberuehrt."
+            ZS_FEHL="$ZS_FEHL zugang.json"
+        fi
+    else
+        echo "<WARNING> $ZG ist kein lesbares JSON-Objekt mit dem Broker-Kennwort. Sie wird NICHT gesichert;"
+        echo "<WARNING> die bisherige Zweitschrift $ZGB bleibt unberuehrt."
+    fi
+fi
+
 # ---------- Den Bestand retten ----------
 # GEMESSEN an sbin/plugininstall.pl (Zweig master, 23.08.2026): der Installer
 # ruft &purge_installation NICHT nur beim Deinstallieren, sondern auch im

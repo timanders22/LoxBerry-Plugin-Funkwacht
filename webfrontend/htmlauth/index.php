@@ -232,10 +232,14 @@ if ($fw_post && isset($_POST['vorlage'])) {
     }
 }
 
-/* ---------------- Einstellungen sichern ---------------- */
+/* ---------------- Einstellungen sichern ----------------
+ * 1.0.27: Kopf (_hinweis, _plugin, _fassung, _stand), alle Einstellungen samt Wortzeichen und den Teil "zugang"
+ * (Broker-Kennwort aus zugang.json) baut das gemeinsame Sicherungsmodul (fw_sicherung_daten()). Wuerde das eigene
+ * Zurueckspielen die Datei abweisen, sagt es der Kopf _warnung - nur mit Namen, nie mit Werten. */
 if ($fw_post && isset($_POST['sichern'])) {
-    list($fw_name, $fw_inhalt) = fw_sicherung_bauen();
-    if ($fw_inhalt === false) {
+    $fw_name = 'funkwacht_' . date('Ymd_His') . '.json';
+    $fw_inhalt = sicherung_json(fw_sicherung_daten());
+    if ($fw_inhalt === '') {
         $fw_misslungen[] = fw_t('SICH.FEHL');
         $fw_tab = 'tab-settings';
     } else {
@@ -605,8 +609,11 @@ if ($fw_post && isset($_POST['speichern_mqtt'])) {
      * das Kennwort, weil der Browser es nicht zurueckschickt. Geloescht wird
      * nur ueber den ausdruecklichen Haken. */
     $fw_bpw = isset($_POST['broker_pass']) && is_string($_POST['broker_pass']) ? $_POST['broker_pass'] : '';
+    /* 1.0.27: das Kennwort geht nach zugang.json (0600, fw_zugang_speichern()), nicht mehr in funkwacht.json;
+     * null heisst: unveraendert. */
+    $fw_pw_neu = null;
     if (!empty($_POST['broker_pass_weg'])) {
-        $fw_cfg['broker_pass'] = '';
+        $fw_pw_neu = '';
     } elseif (trim($fw_bpw) !== '') {
         /* U7 (Pruefung 29.09.2026): ein Kennwort wird NIE veraendert. Bis
          * 1.0.8 entfernte $fw_sauber Anfuehrungszeichen - aus geheim"123
@@ -617,11 +624,11 @@ if ($fw_post && isset($_POST['speichern_mqtt'])) {
         if (fw_steuerzeichen($fw_bpw)) {
             $fw_fehler[] = fw_t('FEHLER.KENNWORT_ZEICHEN');
         } else {
-            $fw_cfg['broker_pass'] = $fw_bpw;
+            $fw_pw_neu = $fw_bpw;
         }
     }
     if (!$fw_fehler) {
-        if (fw_config_speichern($fw_cfg)) {
+        if (fw_config_speichern($fw_cfg) && ($fw_pw_neu === null || fw_zugang_speichern($fw_pw_neu))) {
             $fw_meldungen[] = fw_t('ALLG.GESPEICHERT');
             $fw_meldungen[] = fw_t('MQTT.NEUSTART_NOETIG');
             fw_log('MQTT-Einstellungen gespeichert.');
@@ -664,39 +671,58 @@ if ($fw_post && isset($_POST['speichern_bruecke'])) {
     $fw_tab = 'tab-mqtt';
 }
 
-/* ---------------- Zurueckspielen ---------------- */
+/* ---------------- Zurueckspielen ----------------
+ * 1.0.27: den Eingang prueft das gemeinsame Sicherungsmodul (sicherung_eingang(), Entscheidung des Hausherrn
+ * 12.11.2026) - in jeder Linie gleich: zuerst der Haken zurueck_ok (ohne ihn wird nichts gelesen und nichts geaendert),
+ * dann is_uploaded_file() und die Groessengrenze des Moduls. Danach liest, prueft und speichert
+ * sicherung_zurueckspielen() mit der Beschreibung fw_sicherung_beschreibung(): Unbekanntes verworfen und genannt, ein
+ * leerer Wert laesst den geltenden stehen, eine Beanstandung aendert GAR NICHTS. Bis 1.0.26 stand hier ein eigener
+ * Haken (sicher_zurueck) und fw_sicherung_lesen(). Die Meldungen maskiert diese Seite bei der Ausgabe selbst (fw_e) -
+ * deshalb bekommt sicherung_meldungen() 'e' ohne Maskierung (Regeln/05, "Meldungen als Klartext"). */
 if ($fw_post && isset($_POST['zurueckspielen'])) {
-    /* Ohne Haekchen geschieht nichts - und zwar bevor die Datei ueberhaupt
-     * angesehen wird, damit kein halb zurueckgespielter Zustand entstehen
-     * kann. */
-    if (empty($_POST['sicher_zurueck'])) {
-        $fw_fehler[] = fw_t('ALLG.OHNE_HAKEN');
-        $fw_tab = 'tab-settings';
-    } elseif (!isset($_FILES['sicherungsdatei']) || !is_uploaded_file($_FILES['sicherungsdatei']['tmp_name'])) {
-        $fw_fehler[] = fw_t('SICH.KEINE_DATEI');
+    $fw_klar = array('e' => function ($s) { return $s; });
+    list($fw_roh, $fw_ab) = sicherung_eingang(fw_sicherung_beschreibung(), $_POST, $_FILES, 'sicherungsdatei');
+    if ($fw_ab !== null) {
+        $fw_sm = sicherung_meldungen($fw_klar + fw_sicherung_beschreibung(), $fw_ab);
+        foreach ($fw_sm['fehler'] as $fw_x) { $fw_fehler[] = $fw_x; }
     } else {
-        $fw_roh = (string) @file_get_contents($_FILES['sicherungsdatei']['tmp_name']);
-        list($fw_ok, $fw_text, $fw_liste) = fw_sicherung_lesen($fw_roh);
-        if ($fw_ok) {
-            $fw_meldungen[] = $fw_text;
-            /* U10: den Waechter nachziehen und sagen, was geschah. Er liest
-             * die Konfiguration zwar in jedem Durchlauf neu, der Mithoerer
-             * aber nicht die Broker-Angaben. */
-            if (fw_dienst_pid() > 0) {
-                list($fw_ok2, $fw_text2) = fw_dienst_schalten('restart');
-                if ($fw_ok2) {
-                    $fw_meldungen[] = sprintf(fw_t('SICH.DIENST_NEU'), fw_dienst_pid());
-                } else {
-                    $fw_misslungen[] = sprintf(fw_t('SICH.DIENST_FEHL'), $fw_text2);
-                }
-                fw_log('Nach dem Zurueckspielen: Waechter neu gestartet -> ' . ($fw_ok2 ? 'ok' : 'fehl'));
-            } else {
-                $fw_meldungen[] = fw_t('SICH.DIENST_LIEF_NICHT');
+        $fw_b = fw_sicherung_beschreibung();
+        /* Erst zugang.json, dann funkwacht.json (Bauart AnkerSolix 0.9.42): scheitert das Kennwort, bleibt auch die
+         * Konfiguration unveraendert. Traegt die Datei keinen Teil "zugang", bleibt zugang.json, wie sie ist; steht das
+         * Kennwort dann noch in funkwacht.json (Uebergang gescheitert), kommt es vorher nach zugang.json - sonst fiele
+         * es mit dem neuen Stand weg. */
+        $fw_b['speichern'] = function ($neu, $jetzt, $r) {
+            $zg = (isset($r['teile']['zugang']) && is_array($r['teile']['zugang'])) ? $r['teile']['zugang'] : null;
+            if ($zg !== null && array_key_exists('broker_pass', $zg)) {
+                if (!fw_zugang_speichern($zg['broker_pass'])) { return false; }
+            } elseif (isset($jetzt['broker_pass']) && is_string($jetzt['broker_pass'])) {
+                list(, $zz) = fw_zugang_lesen(false);
+                if ($zz !== 'ok' && !fw_zugang_speichern($jetzt['broker_pass'])) { return false; }
             }
-        } else {
-            $fw_fehler[] = $fw_text;
-            foreach ($fw_liste as $fw_z) { $fw_fehler[] = $fw_z; }
-        }
+            unset($neu['broker_pass']);
+            return fw_config_speichern($neu);
+        };
+        /* Zwei Paare (Modul 1.2.7): funkwacht.json und, wenn es sie gibt, zugang.json - je mit Zweitschrift. */
+        $fw_b['zweitschrift'] = function () {
+            $p = fw_paths();
+            $l = array(array($p['config'], $p['sicherung']));
+            if ($p['zugang'] !== '' && is_file($p['zugang'])) { $l[] = array($p['zugang'], $p['zugang_sicherung']); }
+            return $l;
+        };
+        /* U10: den Waechter nachziehen und sagen, was geschah. Er liest die Konfiguration zwar in jedem Durchlauf
+         * neu, der Mithoerer aber nicht die Broker-Angaben. */
+        $fw_b['nachziehen'] = function () {
+            if (fw_dienst_pid() <= 0) { return array(fw_t('SICH.DIENST_LIEF_NICHT')); }
+            list($fw_ok2, $fw_text2) = fw_dienst_schalten('restart');
+            fw_log('Nach dem Zurueckspielen: Waechter neu gestartet -> ' . ($fw_ok2 ? 'ok' : 'fehl'));
+            return array($fw_ok2 ? sprintf(fw_t('SICH.DIENST_NEU'), fw_dienst_pid())
+                                 : sprintf(fw_t('SICH.DIENST_FEHL'), $fw_text2));
+        };
+        $fw_b['log'] = function ($z) { fw_log($z); };
+        $fw_r = sicherung_zurueckspielen($fw_b, $fw_roh);
+        $fw_sm = sicherung_meldungen($fw_klar + $fw_b, $fw_r);
+        foreach ($fw_sm['fehler'] as $fw_x) { $fw_fehler[] = $fw_x; }
+        foreach ($fw_sm['hinweise'] as $fw_x) { $fw_meldungen[] = $fw_x; }
     }
     $fw_tab = 'tab-settings';
 }
@@ -1411,11 +1437,11 @@ if ($fw_dzeilen) {
 </div>
 <?php
 /* X-3 (Welle 4): besteht die eigene Sicherung das eigene Zurueckspielen?
- * Dieselbe Pruefung (fw_sicherung_pruefen). Eine Warnung - der Knopf
- * liefert die Datei trotzdem, mit _warnung im Kopf. */
-$fw_sich_mangel = fw_sicherung_selbstpruefung();
+ * Seit 1.0.27 dieselbe Pruefung des Moduls (fw_sicherung_altwerte()): die Namen, nie Werte. Eine Warnung - der
+ * Knopf liefert die Datei trotzdem, mit _warnung im Kopf. */
+$fw_sich_mangel = fw_sicherung_altwerte();
 if ($fw_sich_mangel) { ?>
-<div class="sm-warnung" id="fw_sich_warnung"><b><?= fw_e(fw_t('SICH.SELBST_WARN')) ?></b><br><?= implode('<br>', array_map('fw_e', $fw_sich_mangel)) ?></div>
+<div class="sm-warnung" id="fw_sich_warnung"><b><?= fw_e(fw_t('SICH.SELBST_WARN')) ?></b><br><?= fw_e(implode(', ', $fw_sich_mangel)) ?></div>
 <?php } ?>
 <div class="sm-knopfreihe">
   <form action="index.php" method="post">
@@ -1427,7 +1453,7 @@ if ($fw_sich_mangel) { ?>
     <input data-role="none" type="hidden" name="activetab" value="tab-settings">
     <input data-role="none" type="hidden" name="fmt" value="<?= fw_e($fw_merkmal) ?>">
     <input data-role="none" type="file" name="sicherungsdatei" accept=".json,application/json">
-    <label class="sm-haken"><input data-role="none" type="checkbox" name="sicher_zurueck" value="1"> <?= fw_e(fw_t('SICH.SICHER')) ?></label>
+    <?= sicherung_haken_zeile(fw_sicherung_beschreibung()) ?>
     <input data-role="none" type="hidden" name="aktion" value="zurueckspielen"><button data-role="none" class="sm-btn sm-b-aktion" type="submit" name="zurueckspielen" value="1"><?= fw_e(fw_t('SICH.K_ZURUECK')) ?></button>
   </form>
 </div>
@@ -1486,7 +1512,7 @@ if ($fw_sich_mangel) { ?>
   <label for="fw_bpass"><?= fw_e(fw_t('MQTT.L_PASS')) ?></label>
   <input data-role="none" type="password" id="fw_bpass" name="broker_pass" value="" autocomplete="new-password">
   <p class="sm-hilfe"><?= sprintf(fw_t('MQTT.H_PASS'),
-      trim((string) $fw_cfg['broker_pass']) !== '' ? fw_e(fw_t('ALLG.JA')) : fw_e(fw_t('ALLG.NEIN'))) ?></p>
+      trim((string) fw_broker_pass()) !== '' ? fw_e(fw_t('ALLG.JA')) : fw_e(fw_t('ALLG.NEIN'))) ?></p>
   <label><input data-role="none" type="checkbox" name="broker_pass_weg" value="1"> <?= fw_e(fw_t('MQTT.L_PASS_WEG')) ?></label>
 </div>
 <div class="sm-feld">

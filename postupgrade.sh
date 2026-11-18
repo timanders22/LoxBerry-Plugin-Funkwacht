@@ -114,8 +114,30 @@ if [ -f "$BASE/config/plugins/$PFOLDER/funkwacht.json" ] && [ -f "$FW_VV" ]; the
             *";STAND=ruht;"*)          echo "<INFO> Konfiguration nicht vervollstaendigt: die Marke der Aktualisierung liegt noch. Der Waechter holt es beim naechsten Start nach." ;;
             *) echo "<WARNING> Konfiguration nicht vervollstaendigt: ${FW_VV_ZEILE:-keine Ausgabe}. Der Waechter versucht es beim naechsten Start erneut." ;;
         esac
+        # 1.0.27: der Uebergang des Broker-Kennworts nach zugang.json (fw_zugang_uebergang(), dieselbe Zeile).
+        case "$FW_VV_ZEILE" in
+            *";KENNWORT=uebernommen;"*) echo "<OK> Broker-Kennwort aus funkwacht.json nach zugang.json (0600) uebernommen." ;;
+            *";KENNWORT=fehler;"*)
+                echo "<WARNING> Broker-Kennwort nicht nach zugang.json uebernommen - es bleibt in funkwacht.json und gilt"
+                echo "<WARNING> weiter; Grund im Protokoll der Funkwacht. Der Waechter versucht es beim naechsten Start erneut." ;;
+        esac
     else
         echo "<WARNING> Konfiguration nicht vervollstaendigt: php wurde nicht gefunden."
+    fi
+fi
+
+# 1.0.27: findet sich das Broker-Kennwort wieder? Liegt seine Zweitschrift neben dem Konfigordner, muss zugang.json
+# jetzt da und inhaltsgleich sein (postinstall.sh holt sie zurueck, der Uebergang oben schreibt beide gleich).
+ZG="$BASE/config/plugins/$PFOLDER/zugang.json"
+ZGB="$BASE/config/plugins/$PFOLDER.backup.zugang.json"
+if [ -f "$ZGB" ]; then
+    if [ -f "$ZG" ] && cmp -s "$ZG" "$ZGB"; then
+        echo "<OK> Broker-Kennwort (zugang.json) ist nach der Aktualisierung da."
+    elif [ -f "$ZG" ]; then
+        echo "<WARNING> zugang.json weicht von ihrer Zweitschrift ab; es gilt zugang.json."
+    else
+        echo "<WARNING> zugang.json fehlt nach der Aktualisierung; der Mithoerer liest die Zweitschrift, die"
+        echo "<WARNING> Oberflaeche stellt die Datei beim naechsten Aufruf daraus her."
     fi
 fi
 

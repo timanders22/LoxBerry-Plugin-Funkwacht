@@ -4,10 +4,26 @@
 Merkt, wenn ein Stick verstummt, weckt ihn in Stufen wieder auf — und misst
 nach, ob es geholfen hat.
 
-Version 1.0.26 · LoxBerry ab 3.0 · PHP 7.4 und 8.x · Python 3 mit paho-mqtt
+Version 1.0.27 · LoxBerry ab 3.0 · PHP 7.4 und 8.x · Python 3 mit paho-mqtt
 (Debian-Paket, über `dpkg/apt`)
 
 ---
+
+## Neu in 1.0.27
+
+- **Verhalten geändert – Einstellungen sichern und zurückspielen mit dem gemeinsamen Sicherungsmodul 1.2.11,** wie in den übrigen Plugins dieses Hauses:
+  - Die Sicherungsdatei trägt jetzt einen Kopf mit dem Kennzeichen des Plugins (`_plugin`) und seiner Fassung. Die Datei eines anderen Plugins wird als Ganzes abgewiesen. Sicherungen der Fassungen 1.0.0 bis 1.0.26 werden weiter angenommen; die Meldung sagt dann „ältere Sicherung erkannt“.
+  - Ein Eintrag, den diese Fassung nicht kennt, weist die Datei nicht mehr ab: Er wird verworfen und mit seinem Namen genannt, der Rest wird zurückgespielt. Bis 1.0.26 wurde die ganze Datei abgewiesen.
+  - Ein leerer Wert in der Datei überschreibt keinen gesetzten Wert mehr; der bisherige bleibt und wird genannt.
+  - Was eine ältere Sicherung noch nicht kannte (Sprachansage, weitere Ausgabeziele, Befehle über MQTT, HTTP-Endpunkt, Regeln der Ansage), behält den geltenden Wert, und die Meldung nennt es jetzt. Bis 1.0.26 geschah das bei den Feldern der Sprachausgabe still.
+  - Einträge der geltenden Einstellungen, die diese Fassung nicht kennt (etwa aus einer Bearbeitung von Hand), fallen beim Zurückspielen weg und werden mit ihrem Namen genannt, nie mit ihrem Wert. Im Block der Sprachausgabe blieben sie bis 1.0.26 still stehen.
+  - Der Haken „Ja, die geltenden Einstellungen durch die Sicherung ersetzen“ und die Prüfung der hochgeladenen Datei kommen aus dem Modul und lauten wie in den übrigen Plugins. Eine Datei darf höchstens 256 KB groß sein; bis 1.0.26 lag die Grenze bei 1 MB.
+  - Wie bisher wird eine Datei als Ganzes abgewiesen, wenn ein Wert nicht passt, wenn sie ein Sprechtoken trägt oder wenn einer Stick-Zeile ein Feld fehlt; dann ändert sich nichts.
+- **Verhalten geändert – das Broker-Kennwort steht in einer eigenen Datei.** Das Kennwort für einen eigenen MQTT-Broker (Reiter *MQTT*) liegt jetzt in `zugang.json` im Konfigurationsordner, nur für das Plugin lesbar (Rechte 0600), mit einer Zweitschrift neben dem Ordner wie die übrigen Einstellungen. Bis 1.0.26 stand es in `funkwacht.json`. Eine bestehende Anlage wird am Ende der Aktualisierung bzw. beim ersten Aufruf der Oberfläche umgestellt: Das Kennwort wird übernommen und aus `funkwacht.json` entfernt; das Protokoll sagt es in einer Zeile, ohne das Kennwort. Gelingt das nicht, bleibt es in `funkwacht.json` und gilt dort weiter. Der Reiter *Test* zeigt in einer neuen Zeile, ob das Kennwort in seiner eigenen Datei liegt. Die Sicherung trägt das Kennwort weiter, jetzt im Abschnitt `zugang`. Der Wächter führt das Kennwort nicht mehr unter seinen eigenen Vorgaben, wo es ohne Wirkung stand; er liest es wie oben beschrieben aus `zugang.json`, solange die Umstellung aussteht aus `funkwacht.json`.
+- **Einstellungen vervollständigt:** Die Regeln der Sprachansage und der Vermerk, woher die Sprechtoken stammen, gehören jetzt zu den Vorgaben. Beim Start des Wächters werden sie einmal in `funkwacht.json` eingetragen, mit dem Wert, der schon bisher galt.
+- **Knopf „Dokumentation“:** `plugin.cfg` nennt jetzt `WEBSITE=` mit diesem Repository; LoxBerry übernimmt die Adresse bei der Installation und zeigt sie in der Plugin-Verwaltung als Knopf.
+- Gemessen auf dem Arbeitsrechner unter PHP 7.4 und 8.4 mit dem Prüfstand, der über einen Webserver die echten Knöpfe drückt und die Sicherungen aller 27 Vorfassungen zurückspielt, und mit Proben für den Übergang des Kennworts. Am Gerät nicht gemessen.
+- **Sicherungsmodul 1.2.11:** Wandelt ein Plugin beim Zurückspielen eine Sicherung aus einer Textdatei um, sagt die Meldung das jetzt mit einem gemeinsamen Satz, und Mängel darin werden in allen Plugins mit denselben Bezeichnungen genannt. Dieses Plugin wandelt keine Textdateien um; an seinem Verhalten ändert sich dadurch nichts. Gemessen mit dem Prüfstand auf dem Arbeitsrechner unter PHP 7.4 und 8.4. Am Gerät nicht gemessen.
 
 ## Neu in 1.0.26
 

@@ -289,7 +289,9 @@ def config() -> dict:
                 "global_aus": 0, "log_kb": 500, "verlauf_tage": 90,
                 "melden_aktiv": 1, "signal_ein": 0, "signal_url": "",
                 "broker_host": "", "broker_port": "", "broker_user": "",
-                "broker_pass": "", "broker_id": ""}
+                "broker_id": ""}
+    # 1.0.27: das Broker-Kennwort hat hier keine Vorgabe mehr - es liegt in zugang.json und wird nur ueber
+    # fw_mqtt.kennwort_lesen() gelesen (Frage 10 der Nacht 18.11.2026, Entscheidung des Hausherrn 18.11.2026).
     for k, v in vorgaben.items():
         c.setdefault(k, v)
     c["kaputt"] = 1 if zustand == "kaputt" else 0

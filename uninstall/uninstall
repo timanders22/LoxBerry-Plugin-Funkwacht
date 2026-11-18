@@ -184,6 +184,9 @@ fi
 # Beides liegt NEBEN dem jeweiligen Ordner und ueberlebt deshalb jedes
 # Update - also auch das Deinstallieren, wenn es hier nicht steht.
 rm -f "$BASE/config/plugins/$PFOLDER.backup.json"
+# 1.0.27: die Zweitschrift des Broker-Kennworts (zugang.json) samt .alt und Resten eines abgebrochenen Sicherns.
+rm -f "$BASE/config/plugins/$PFOLDER.backup.zugang.json" "$BASE/config/plugins/$PFOLDER.backup.zugang.json.alt"
+rm -f "$BASE/config/plugins/$PFOLDER.backup.zugang.json.neu."* 2>/dev/null
 rm -rf "$BASE/data/plugins/$PFOLDER.bestand"
 # S1 (Pruefung 29.09.2026): was postinstall.sh bei einer Neuinstallation
 # beiseitegelegt hat (.alt), und Reste eines abgebrochenen Sicherns (.neu).

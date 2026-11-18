@@ -56,6 +56,10 @@ if (!function_exists('fw_e')) {
  * mit weiteren Ausgabezielen, fw_mit_zielen(), Welle Mehrfach-Ziele). Liegt neben dieser Datei; die Datei schuetzt
  * sich selbst gegen doppeltes Laden. */
 require_once __DIR__ . '/sprachausgabe.php';
+/* 1.0.27: das gemeinsame Sicherungsmodul (Abschrift von Werkzeuge/gemeinsam/sicherung.php; Auftrag des Hausherrn
+ * 12.11.2026, Umbau dieser Linie 18.11.2026). Liegt neben dieser Datei und schuetzt sich selbst gegen doppeltes
+ * Laden. */
+require_once __DIR__ . '/sicherung.php';
 function fw_x($s) { return htmlspecialchars((string) $s, ENT_QUOTES | ENT_XML1, 'UTF-8'); }
 
 /* Wie viele Zeilen die Oberflaeche hoechstens fuehrt. Die WIRKLICHE Zahl
@@ -122,7 +126,7 @@ function fw_paths($neu = false)
     if (!$dir) { $dir = basename(dirname(__FILE__)); }
     if ($home === '') {
         $p = array('home' => '', 'plugin' => $dir);
-        foreach (array('configdir', 'config', 'sicherung', 'datadir', 'stand', 'historie',
+        foreach (array('configdir', 'config', 'sicherung', 'zugang', 'zugang_sicherung', 'datadir', 'stand', 'historie',
                        'auftraege', 'mqttstand', 'verlauf', 'bestand', 'logdir', 'log',
                        'dienstlog', 'bindir', 'altpraefix', 'einmal', 'gleichwert') as $fw_k) {
             $p[$fw_k] = '';
@@ -139,6 +143,10 @@ function fw_paths($neu = false)
         'configdir' => $basis . '/config/plugins/' . $dir,
         'config'    => $basis . '/config/plugins/' . $dir . '/funkwacht.json',
         'sicherung' => $basis . '/config/plugins/' . $dir . '.backup.json',
+        /* 1.0.27 (Entscheidung des Hausherrn 18.11.2026): das Broker-Kennwort, das der Mithoerer liest, in einer
+         * eigenen Datei 0600 (Regeln/05) - mit Zweitschrift neben dem Konfigordner wie funkwacht.json. */
+        'zugang'    => $basis . '/config/plugins/' . $dir . '/zugang.json',
+        'zugang_sicherung' => $basis . '/config/plugins/' . $dir . '.backup.zugang.json',
         'datadir'   => $basis . '/data/plugins/' . $dir,
         'stand'     => $basis . '/data/plugins/' . $dir . '/stand.json',
         'historie'  => $basis . '/data/plugins/' . $dir . '/historie.json',
@@ -207,13 +215,18 @@ function fw_vorgaben()
         'broker_host'  => '',
         'broker_port'  => '',
         'broker_user'  => '',
-        'broker_pass'  => '',
+        /* 1.0.27: broker_pass steht nicht mehr hier, sondern in zugang.json (fw_broker_pass(), fw_zugang_speichern()). */
         'broker_id'    => '',
         /* Nr. 36 b (Stufe 2): Ansage ueber die gemeinsame Sprachausgabe - ab Werk keine Ausgabeart
          * ('aus'); die Anlaesse sind an, wirken aber erst mit einer Ausgabeart. */
         'ansage_gestoert' => 1,
         'ansage_wieder'   => 1,
         'tts'          => ansage_werk_block(),
+        /* 1.0.27 (Regeln/05: was das Zurueckspielen oder ein gemeinsames Modul in die Konfiguration schreibt, steht
+         * in den Vorgaben): die Regeln der Sprachansage (seit 1.0.19, fw_ansage_regeln() liest ohne Eintrag dieselben
+         * Vorgaben) und der Vermerk der Sprechtoken (nie aus einer Sicherung, ohne Eintrag dasselbe wie leer). */
+        'ansage_regeln' => ansage_regeln_vorgaben(),
+        'ansage_token_herkunft' => array(),
     );
 }
 
@@ -454,6 +467,14 @@ function fw_config($erzeugen = true)
         }
     }
 
+    /* 1.0.27: der Uebergang des Broker-Kennworts nach zugang.json und deren Selbstheilung aus der Zweitschrift - nur
+     * beim Lesen mit Schreibrecht, also nie vom unangemeldeten Endpunkt (fw_config(false)). */
+    if ($erzeugen) {
+        if (is_array($roh) && array_key_exists('broker_pass', $roh) && fw_zugang_uebergang() === 'uebernommen') {
+            unset($roh['broker_pass']);
+        }
+        fw_zugang_lesen(true);
+    }
     $cfg = array_merge(fw_vorgaben(), is_array($roh) ? $roh : array());
     if (!is_array($cfg['geraete'])) { $cfg['geraete'] = array(); }
     $cfg['zeilen'] = max(1, min(FW_GERAETE_MAX, (int) $cfg['zeilen']));
@@ -516,6 +537,130 @@ function fw_config_speichern($cfg, $leere_objekte = false)
         fw_log('Die Zweitschrift liess sich nicht erneuern; die Konfiguration selbst ist geschrieben.');
     }
     return true;
+}
+
+/* ==================================================================
+ * 1.0.27: Das Broker-Kennwort in einer eigenen Datei (zugang.json, 0600)
+ * ==================================================================
+ *
+ * Entscheidung des Hausherrn 18.11.2026 nach der Hausregel "was ein Dienst braucht, in eine eigene Datei 0600"
+ * (Regeln/05, Hausstandard seit 03.09.2026). Der Mithoerer (bin/fw_mqtt.py, zugang()) liest das Kennwort hier; bis
+ * 1.0.26 stand es als broker_pass in funkwacht.json. Form: {"broker_pass": "..."}. Die Zweitschrift
+ * <ordner>.backup.zugang.json liegt neben dem Konfigordner wie die von funkwacht.json, mit denselben Rechten, und
+ * entsteht aus DENSELBEN, zurueckgelesenen Daten (Bauart fw_config_speichern()). Der Uebergang fuer bestehende
+ * Anlagen steht in fw_zugang_uebergang(). Ein Kennwort steht nie im Protokoll.
+ */
+
+/**
+ * zugang.json lesen. Rueckgabe: array(Kennwort|null, Zustand), Zustand 'ok' | 'fehlt' | 'kaputt'.
+ * Eine Datei ohne den Schluessel broker_pass (auch "{}") ist 'kaputt', nicht leer. Fehlt die Datei und traegt die
+ * Zweitschrift das Kennwort (Merkmal: der Schluessel broker_pass als Text), gilt dieses; mit $erzeugen wird es einmal
+ * zurueckgeschrieben und das einmal protokolliert (Regeln/05: Selbstheilung nach Inhalt).
+ */
+function fw_zugang_lesen($erzeugen = false)
+{
+    $p = fw_paths();
+    if ($p['zugang'] === '') { return array(null, 'fehlt'); }
+    clearstatcache(true, $p['zugang']);
+    list($d, $z) = fw_json_lesen_geprueft($p['zugang']);
+    if ($z === 'ok') {
+        return (array_key_exists('broker_pass', $d) && is_string($d['broker_pass']))
+            ? array($d['broker_pass'], 'ok') : array(null, 'kaputt');
+    }
+    if ($z === 'kaputt' || is_file($p['zugang'])) { return array(null, 'kaputt'); }
+    list($s, $zs) = fw_json_lesen_geprueft($p['zugang_sicherung']);
+    if ($zs !== 'ok' || !array_key_exists('broker_pass', $s) || !is_string($s['broker_pass'])) {
+        return array(null, 'fehlt');
+    }
+    if ($erzeugen && !fw_upgrade_laeuft()) {
+        if (fw_json_schreiben($p['zugang'], array('broker_pass' => $s['broker_pass']), 0600)) {
+            fw_log('zugang.json fehlte und wurde aus der Zweitschrift wiederhergestellt (Broker-Kennwort).');
+        } else {
+            fw_log('zugang.json fehlt und liess sich aus der Zweitschrift nicht wiederherstellen (Schreiben gescheitert).');
+        }
+    }
+    return array($s['broker_pass'], 'ok');
+}
+
+/**
+ * Das geltende Broker-Kennwort: aus zugang.json; solange der Uebergang aussteht (Datei fehlt), aus funkwacht.json.
+ * Eine unlesbare zugang.json ergibt '' (fail closed: dann gilt das Kennwort des LoxBerry wie bei leerem Feld) - der
+ * Reiter Test zeigt sie rot. Dieselbe Reihenfolge liest bin/fw_mqtt.py.
+ */
+function fw_broker_pass($cfg = null)
+{
+    list($pw, $z) = fw_zugang_lesen(false);
+    if ($z === 'ok') { return $pw; }
+    if ($z === 'kaputt') { return ''; }
+    if (!is_array($cfg)) {
+        $p = fw_paths();
+        list($cfg) = $p['config'] !== '' ? fw_json_lesen_geprueft($p['config']) : array(array());
+    }
+    return (isset($cfg['broker_pass']) && is_string($cfg['broker_pass'])) ? $cfg['broker_pass'] : '';
+}
+
+/**
+ * Das Broker-Kennwort schreiben: zugang.json (0600), zuruecklesen, erst dann die Zweitschrift aus den zurueckgelesenen
+ * Daten. Rueckgabe: true, wenn zugang.json geschrieben und gleich zurueckgelesen ist.
+ */
+function fw_zugang_speichern($pw)
+{
+    $p = fw_paths();
+    if ($p['zugang'] === '' || !is_string($pw)) { return false; }
+    if (!fw_json_schreiben($p['zugang'], array('broker_pass' => $pw), 0600)) { return false; }
+    list($zurueck, $z) = fw_json_lesen_geprueft($p['zugang']);
+    if ($z !== 'ok' || !isset($zurueck['broker_pass']) || $zurueck['broker_pass'] !== $pw) {
+        fw_log('zugang.json liess sich nach dem Schreiben nicht zuruecklesen. Die Zweitschrift bleibt unangetastet.');
+        return false;
+    }
+    if (!fw_json_schreiben($p['zugang_sicherung'], $zurueck, 0600)) {
+        fw_log('Die Zweitschrift von zugang.json liess sich nicht erneuern; zugang.json selbst ist geschrieben.');
+    }
+    return true;
+}
+
+/**
+ * Uebergang fuer bestehende Anlagen (1.0.27): traegt funkwacht.json noch broker_pass, kommt es nach zugang.json und
+ * wird danach aus funkwacht.json und ihrer Zweitschrift entfernt. Erst zugang.json schreiben und zuruecklesen, dann
+ * funkwacht.json - scheitert ein Schritt, bleibt der Schluessel stehen, und der Mithoerer liest ihn weiter dort; es geht
+ * nichts verloren, und der naechste Aufruf versucht es erneut. Traegt zugang.json schon ein nicht leeres Kennwort, gilt
+ * dieses (es wurde nach dem Umbau gesetzt), und der alte Schluessel wird nur entfernt. Eine unlesbare zugang.json haelt
+ * den Uebergang an. Nicht waehrend einer Aktualisierung (Marke), nie ohne LoxBerry-Wurzel. Die Werte aus der Datei
+ * bleiben, wie sie sind (fw_config_speichern(..., true)), fremde Schluessel auch. Genau eine Protokollzeile, ohne Wert.
+ * Aufgerufen aus fw_config() (Lesen mit Schreibrecht, nie vom unangemeldeten Endpunkt) und fw_config_vervollstaendigen()
+ * (Waechterstart, postupgrade.sh). Rueckgabe: 'kein' | 'uebernommen' | 'fehler'.
+ */
+function fw_zugang_uebergang()
+{
+    $p = fw_paths();
+    if ($p['config'] === '' || $p['zugang'] === '' || fw_upgrade_laeuft()) { return 'kein'; }
+    clearstatcache(true, $p['config']);
+    if (!is_file($p['config'])) { return 'kein'; }
+    list($datei, $zustand) = fw_json_lesen_geprueft($p['config']);
+    if ($zustand !== 'ok' || !array_key_exists('broker_pass', $datei)) { return 'kein'; }
+    if (!is_string($datei['broker_pass'])) {
+        fw_log('Broker-Kennwort NICHT nach zugang.json uebernommen: broker_pass in funkwacht.json ist kein Text.');
+        return 'fehler';
+    }
+    list($pw, $z) = fw_zugang_lesen(true);
+    if ($z === 'kaputt') {
+        fw_log('Broker-Kennwort NICHT nach zugang.json uebernommen: zugang.json ist unlesbar und bleibt unberuehrt.');
+        return 'fehler';
+    }
+    $schon = ($z === 'ok' && $pw !== '');
+    if (!$schon && !fw_zugang_speichern($datei['broker_pass'])) {
+        fw_log('Broker-Kennwort NICHT nach zugang.json uebernommen: zugang.json liess sich nicht schreiben.');
+        return 'fehler';
+    }
+    $datei = fw_json_leere_objekte($datei, json_decode((string) @file_get_contents($p['config'])));
+    unset($datei['broker_pass']);
+    if (!fw_config_speichern($datei, true)) {
+        fw_log('Broker-Kennwort steht in zugang.json, liess sich aber aus funkwacht.json nicht entfernen.');
+        return 'fehler';
+    }
+    fw_log('Broker-Kennwort aus funkwacht.json nach zugang.json (0600) uebernommen und dort entfernt'
+         . ($schon ? '; zugang.json trug schon eines, es gilt weiter.' : '.'));
+    return 'uebernommen';
 }
 
 /**
@@ -584,9 +729,23 @@ function fw_json_leere_objekte($a, $o)
  *   beim Speichern). Genau eine Protokollzeile mit den Namen, nie Werte.
  *
  * Rueckgabe: array('stand' => ohne_wurzel|ruht|ohne_datei|ohne_merkwort
- *                  |vollstaendig|ergaenzt|fehler, 'schluessel' => array(...))
+ *                  |vollstaendig|ergaenzt|fehler, 'schluessel' => array(...),
+ *                  'kennwort' => kein|uebernommen|fehler)
+ *
+ * 1.0.27: vorher der Uebergang des Broker-Kennworts nach zugang.json (fw_zugang_uebergang(); er schreibt nur,
+ * wenn funkwacht.json broker_pass noch traegt, und ruht wie dieses Vervollstaendigen waehrend einer
+ * Aktualisierung), danach das Vervollstaendigen wie bisher (fw_config_vervollstaendigen_kern()).
  */
 function fw_config_vervollstaendigen()
+{
+    $kw = fw_zugang_uebergang();
+    $e = fw_config_vervollstaendigen_kern();
+    $e['kennwort'] = $kw;
+    return $e;
+}
+
+/** Das Vervollstaendigen selbst (bis 1.0.26 fw_config_vervollstaendigen()), unveraendert. */
+function fw_config_vervollstaendigen_kern()
 {
     $p = fw_paths();
     if ($p['config'] === '') {
@@ -2068,7 +2227,8 @@ function fw_einstellung_pruefen($k, $w)
 {
     $wo = sprintf(fw_t('SICH.SCHLUESSEL'), $k);
     /* Nr. 36 b: der Block tts mit den Regeln des Moduls (Ausgabeart, Adresse im Heimnetz, Vorlage). Ein
-     * Sprechtoken in einer Sicherungsdatei weist fw_sicherung_lesen() vorher ab. */
+     * Sprechtoken in einer Sicherungsdatei weist seit 1.0.27 die Pruefung des Blocks in fw_sicherung_beschreibung()
+     * vorher ab. */
     if ($k === 'tts') {
         $fw_tg = '';
         if (is_array($w) && ansage_wert_pruefen($w, $fw_tg, fw_ansage_modi()) !== null) { return array(); }
@@ -2148,8 +2308,9 @@ function fw_einmal_schreiben($meldungen, $fehler, $misslungen, $test, $eingaben 
     if ($f === '') { return false; }
     $cfg = fw_config(false);
     $geheim = array();
-    foreach (array('aktionstoken', 'broker_pass') as $k) {
-        $s = is_string($cfg[$k]) ? $cfg[$k] : '';
+    /* 1.0.27: das Broker-Kennwort kommt aus zugang.json (fw_broker_pass()). */
+    foreach (array((isset($cfg['aktionstoken']) && is_string($cfg['aktionstoken'])) ? $cfg['aktionstoken'] : '',
+                   fw_broker_pass()) as $s) {
         if (strlen($s) >= 4) { $geheim[] = $s; }
     }
     $weg = function ($t) use ($geheim) {
@@ -2228,188 +2389,201 @@ function fw_altpraefix_merken($praefix)
  * ================================================================== */
 
 /**
- * Die Einstellungen als JSON - MIT Wortzeichen.
+ * 1.0.27: Die Beschreibung dieser Linie fuer das gemeinsame Sicherungsmodul (sicherung.php neben dieser Datei;
+ * Auftrag des Hausherrn 12.11.2026, Umbau dieser Linie 18.11.2026 "Ja, umbauen").
  *
- * Eine Sicherung ohne Wortzeichen waere nach dem Zurueckspielen wertlos: die
- * Adressen im Miniserver wuerden alle ungueltig. Wer die Datei weitergibt,
- * gibt damit auch das Wortzeichen und die Broker-Zugangsdaten weiter - das
- * steht in der Oberflaeche ueber dem Knopf.
+ * Bis 1.0.26 stand hier ein eigener Zweig (fw_sicherung_bauen(), fw_sicherung_pruefen(), fw_sicherung_lesen()):
+ * ein unbekannter Schluessel wies die ganze Datei ab, eine Datei galt als eigene, sobald sie eine Liste geraete trug,
+ * ein leerer Wert ueberschrieb den geltenden, und der Haken stand im Formular dieser Linie. Seither wie in jeder Linie
+ * mit dem Modul: Kennzeichen _plugin = LoxBerry-Plugin-Funkwacht (Name des Repositorys; bis 1.0.26 gab es keines),
+ * eine Datei mit fremdem Kennzeichen wird abgewiesen, eine ohne nur dann gelesen, wenn sie eine aeltere eigene
+ * Sicherung ist (fw_sicherung_alt_erkennen()); unbekannte Schluessel werden verworfen und mit Namen genannt; ein
+ * leerer Wert ueberschreibt keinen bestehenden; der Haken "Zurueckspielen bestaetigen" kommt aus dem Modul.
+ *
+ * Wie bisher: jeder Wert geht durch fw_einstellung_pruefen() (dieselben Grenzen, Muster und Auswahllisten wie das
+ * Formular), jede Stick-Zeile durch fw_geraet_zeile_pruefen() - fehlt ihr ein Feld, wird abgewiesen; jede Fassung seit
+ * 1.0.0 schrieb alle 25 Felder (gemessen 18.11.2026 an fw_geraet_vorgabe() aller Archive 1.0.0 bis 1.0.26). Eine Datei
+ * mit Sprechtoken wird abgewiesen, ebenso "Meldung an Signal" ein ohne Adresse. Was eine fruehere Fassung nicht kannte
+ * (Sprachansage seit 1.0.11, befehle_mqtt_ein und endpunkt_ein seit 1.0.17, ansage_regeln seit 1.0.19), behaelt den
+ * geltenden Wert und wird genannt. Der Vermerk ansage_token_herkunft kommt nie aus einer Datei.
+ *
+ * Inhalt der Datei: alle Einstellungen samt Wortzeichen (Aktionstoken) und, als Teil "zugang", das Broker-Kennwort
+ * aus zugang.json (seit 1.0.27 nicht mehr in funkwacht.json). Die Sprechtoken stehen nie darin.
  */
-function fw_sicherung_bauen()
+function fw_sicherung_beschreibung()
 {
-    $cfg = fw_config();
-    /* X-3 (Welle 4): besteht die eigene Sicherung das eigene Zurueckspielen?
-     * Geliefert wird sie trotzdem; _warnung nennt nur Schluesselnamen, nie
-     * Werte. Das Zurueckspielen ueberliest Schluessel mit _. */
-    list(, $fw_namen) = fw_sicherung_pruefen($cfg);
-    /* Nr. 36 b: die Sprechtoken der Sprachausgabe gehen nie in eine Sicherung. */
-    if (isset($cfg['tts']) && is_array($cfg['tts'])) { $cfg['tts'] = ansage_sicherung_bereinigen($cfg['tts']); }
-    unset($cfg['ansage_token_herkunft']);     // 1.0.19
-    $cfg['_erzeugt'] = date('c');
-    $cfg['_fassung'] = 'Funkwacht';
-    if ($fw_namen) {
-        $cfg['_warnung'] = 'Diese Sicherung liesse sich so nicht zurueckspielen. Betroffen: '
-                         . implode(', ', $fw_namen);
+    $p = fw_paths();
+    $tts = array_merge(array_keys(ansage_werk_block()), ansage_geheim());
+    /* Ein Feld des Blocks, das eine aeltere Sicherung noch nicht kannte (etwa die weiteren Ziele seit 1.0.17), behaelt
+     * den geltenden Wert und wird genannt (Regeln/05 Nr. 6) - bis 1.0.26 geschah das still ("+ $fw_tj"). Die
+     * Sprechtoken stehen nie in einer Sicherung; sie behaelt fw_sicherung_vorbereiten(), ohne sie zu nennen. */
+    $tts_knoten = array('ziele' => sicherung_liste(array('art', 'wo', 'laut', 'sprache', 'ein'))
+                                   + array('fehlt' => 'behalten'));
+    foreach (array_diff(array_keys(ansage_werk_block()), ansage_geheim()) as $tk) {
+        if (!isset($tts_knoten[$tk])) { $tts_knoten[$tk] = array('fehlt' => 'behalten'); }
     }
-    return array('funkwacht_' . date('Ymd_His') . '.json',
-                 json_encode($cfg, JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE
-                                   | JSON_UNESCAPED_SLASHES));
+    $schluessel = array(
+        'geraete' => sicherung_liste(array_keys(fw_geraet_vorgabe())),
+        'tts' => sicherung_block($tts, $tts_knoten)
+                 + array(
+                     'fehlt' => 'behalten',
+                     'sichern' => 'ansage_sicherung_bereinigen',
+                     'pruefen' => function ($w, $k = '', $neu = null, $roh = null) {
+                         /* Eine Sicherung dieses Plugins traegt nie ein Sprechtoken - traegt die Datei eines, wird sie
+                          * abgewiesen. Gemessen am Block der DATEI, denn Regel 3 des Moduls setzt ein leeres Feld vorher
+                          * auf den geltenden Wert. */
+                         $tm = is_array($roh) ? ansage_sicherung_mangel($roh) : array();
+                         if ($tm) { return sprintf(fw_t('DURCHSAGE.SICH_TOKEN'), implode(', ', $tm)); }
+                         return fw_einstellung_pruefen('tts', ansage_sicherung_bereinigen($w));
+                     }),
+        'ansage_regeln' => sicherung_block(array_keys(ansage_regeln_vorgaben())) + array(
+            'fehlt' => 'behalten',
+            'pruefen' => function ($w) {
+                $g = '';
+                return ansage_regeln_wert($w, $g) === null
+                    ? 'ansage_regeln: ' . ansage_kennung_text($g !== '' ? $g : 'M_R_BLOCK', fw_ansage_k()) : '';
+            },
+            'wandeln' => function ($w) { $g = ''; return ansage_regeln_wert($w, $g); }),
+        'zugang' => sicherung_block(array('broker_pass')),
+    );
+    foreach (array('ansage_gestoert', 'ansage_wieder', 'befehle_mqtt_ein', 'endpunkt_ein') as $s) {
+        $schluessel[$s] = array('fehlt' => 'behalten');
+    }
+    return array(
+        'kennzeichen' => 'LoxBerry-Plugin-Funkwacht',
+        'hinweis' => 'Sicherung der Einstellungen des LoxBerry-Plugins Funkwacht. Enthaelt das Wortzeichen '
+                   . '(Aktionstoken) und das Broker-Kennwort - wie ein Passwort behandeln. Die Sprechtoken fuer '
+                   . 'Alexa-NG und Chromecast 4 Lox NG stehen nie darin; beim Zurueckspielen bleiben die hinterlegten.',
+        /* Die Fassung im Kopf kommt aus der Plugin-Datenbank bzw. plugin.cfg - keine weitere Stelle im Code. */
+        'home' => (string) $p['home'], 'ordner' => (string) $p['plugin'],
+        'plugin_cfg' => dirname(dirname(__DIR__)) . '/plugin.cfg',
+        'vorgaben' => fw_vorgaben(),
+        'schluessel' => $schluessel,
+        'nie_aus_datei' => array('ansage_token_herkunft'),
+        'teile' => array('zugang' => 'fw_sicherung_zugang_lesen'),
+        'teile_jetzt' => array('zugang' => 'fw_sicherung_zugang_jetzt'),
+        'pruefen' => function ($k, $w) { return fw_einstellung_pruefen($k, $w); },
+        'quer' => 'fw_sicherung_quer',
+        'uebersetzer' => 'fw_sicherung_alt_erkennen',
+        'vorbereiten' => 'fw_sicherung_vorbereiten',
+        'jetzt' => function () { return fw_config(); },
+        't' => 'fw_t',
+        'e' => 'fw_e',
+    );
 }
 
 /**
- * X-3 (Welle 4): die Pruefung des Zurueckspielens als eigene Funktion -
- * dieselbe Stelle fuer das Zurueckspielen, die Warnung beim Sichern und den
- * _warnung-Kopf. $d ist die gelesene Datei bzw. die Konfiguration.
- * Rueckgabe: array(Beanstandungen, betroffene Schluesselnamen).
+ * 1.0.27: Eine Sicherung dieser Linie aus der Zeit vor dem Kennzeichen _plugin (1.0.0 bis 1.0.26) traegt im Kopf
+ * _fassung mit dem Text "Funkwacht" - geschrieben nur vom Sichern-Knopf dieser Linie (bis 1.0.26
+ * $cfg['_fassung'] = 'Funkwacht' in fw_sicherung_bauen(); gemessen 18.11.2026 an allen 27 Archiven 1.0.0 bis 1.0.26),
+ * dazu immer die Liste geraete (an ihr erkannte fw_sicherung_lesen() sie seit 1.0.8) und keinen anderen Kopf als
+ * _erzeugt, _fassung und _warnung. Keine andere Linie im Arbeitsordner schreibt _fassung als Text (gemessen
+ * 18.11.2026 ueber die PHP-, Python-, JSON- und JS-Dateien aller Plugin-Ordner und der Werkzeuge; dasselbe Muster
+ * schlaegt an Funkwacht 1.0.26 an). Das Broker-Kennwort stand dort oben als broker_pass; es kommt in den Teil
+ * "zugang", wie ihn diese Fassung schreibt. Rueckgabe: die Daten oder null.
  */
-function fw_sicherung_pruefen($d)
+function fw_sicherung_alt_erkennen($d)
 {
-    $vorgaben = fw_vorgaben();
-    $mangel = array();
-    $namen = array();
-    foreach ($d as $k => $w) {
+    if (!is_array($d) || !isset($d['_fassung']) || $d['_fassung'] !== 'Funkwacht' || !array_key_exists('geraete', $d)) {
+        return null;
+    }
+    foreach (array_keys($d) as $k) {
         $k = (string) $k;
-        if ($k !== '' && $k[0] === '_') { continue; }      // lesbarer Kopf
-        if (!array_key_exists($k, $vorgaben)) {
-            $mangel[] = sprintf(fw_t('SICH.FREMD'), sprintf(fw_t('SICH.SCHLUESSEL'), $k));
-            $namen[] = $k;
-            continue;
-        }
-        $m = fw_einstellung_pruefen($k, $w);
-        if ($m) {
-            $mangel = array_merge($mangel, $m);
-            $namen[] = $k;
-        }
+        if ($k !== '' && $k[0] === '_' && !in_array($k, array('_erzeugt', '_fassung', '_warnung'), true)) { return null; }
     }
-    $fehlt = array();
-    foreach (array_keys($vorgaben) as $k) {
-        /* Nr. 36 b: eine Sicherung von vor 1.0.11 kennt die Ansage nicht - die geltenden Werte bleiben
-         * (fw_sicherung_lesen() sagt es). */
-        /* Gruppe 44 (1.0.17): ebenso befehle_mqtt_ein und endpunkt_ein (Sicherung von vor 1.0.17). */
-        if (!array_key_exists($k, $d) && in_array($k, array_merge(fw_ansage_schluessel(),
-                array('befehle_mqtt_ein', 'endpunkt_ein')), true)) { continue; }
-        if (!array_key_exists($k, $d)) { $fehlt[] = $k; }
+    if (array_key_exists('broker_pass', $d) && !array_key_exists('zugang', $d)) {
+        $d['zugang'] = array('broker_pass' => $d['broker_pass']);
+        unset($d['broker_pass']);
     }
-    if ($fehlt) {
-        $mangel[] = sprintf(fw_t('SICH.FEHLT'), implode(', ', $fehlt));
-        $namen = array_merge($namen, $fehlt);
-    }
-    if (!$mangel && !empty($d['signal_ein']) && $d['signal_url'] === '') {
-        $mangel[] = fw_t('FEHLER.SIGNAL_LEER');
-        $namen[] = 'signal_url';
-    }
-    return array($mangel, array_values(array_unique($namen)));
-}
-
-/** X-3: die Beanstandungen, die das Zurueckspielen der eigenen Sicherung haette. */
-function fw_sicherung_selbstpruefung()
-{
-    list($m, ) = fw_sicherung_pruefen(fw_config());
-    return $m;
+    return $d;
 }
 
 /**
- * Eine hochgeladene Sicherung pruefen und uebernehmen.
- *
- * Abgewiesen wird, was nicht passt - nie zurechtgebogen (U3, Pruefung
- * 29.09.2026). Jeder Schluessel und jeder Wert geht durch dieselben
- * Pruefstellen wie das Formular; fremde und fehlende Schluessel werden
- * beanstandet; alle Beanstandungen werden gesammelt, und eine halb gueltige
- * Datei aendert GAR NICHTS. Der lesbare Kopf (_erzeugt, _fassung) wird
- * ueberlesen. Rueckgabe: array(ok, Text, Liste der Beanstandungen).
+ * 1.0.27: Der Teil "zugang" einer Sicherung - das Broker-Kennwort. Er geht nach zugang.json (0600), nicht in die
+ * Konfiguration. Rueckgabe fuer das Modul: array(Feld|null, Beanstandungen[]). Unbekannte Felder hat das Modul schon
+ * verworfen und genannt; ein leeres Kennwort in der Datei laesst das geltende stehen (Regel 3). Gepruft wird wie
+ * im Formular: kein Steuerzeichen, sonst unveraendert (U7).
  */
-function fw_sicherung_lesen($roh)
+function fw_sicherung_zugang_lesen($w)
 {
-    if (!is_string($roh) || trim($roh) === '') {
-        return array(0, fw_t('SICH.LEER'), array());
+    if (!is_array($w)) {
+        return array(null, array(sprintf(fw_t('SICH.W_FELD'), sprintf(fw_t('SICH.SCHLUESSEL'), 'zugang'))));
     }
-    if (strlen($roh) > 1048576) {
-        return array(0, fw_t('SICH.ZU_GROSS'), array());
+    if (!array_key_exists('broker_pass', $w)) { return array(array(), array()); }
+    $m = fw_einstellung_pruefen('broker_pass', $w['broker_pass']);
+    return $m ? array(null, $m) : array(array('broker_pass' => $w['broker_pass']), array());
+}
+
+/** 1.0.27: Der geltende Stand des Teils "zugang" (fuer Regel 3 und fuer das Sichern). */
+function fw_sicherung_zugang_jetzt()
+{
+    return array('broker_pass' => fw_broker_pass());
+}
+
+/**
+ * 1.0.27: Was nur im Zusammenspiel falsch sein kann (wie bis 1.0.26): "Meldung an Signal" ein ohne Adresse.
+ * Rueckgabe fuer das Modul: Liste von array(Name, Text).
+ */
+function fw_sicherung_quer($neu, $r)
+{
+    $bean = array();
+    foreach ($r['beanstandet'] as $x) { $bean[] = $x['name']; }
+    if (!in_array('signal_ein', $bean, true) && !in_array('signal_url', $bean, true)
+        && !empty($neu['signal_ein']) && isset($neu['signal_url']) && $neu['signal_url'] === '') {
+        return array(array('signal_url', fw_t('FEHLER.SIGNAL_LEER')));
     }
-    $d = json_decode($roh, true);
-    if (!is_array($d)) {
-        return array(0, sprintf(fw_t('SICH.KEIN_JSON'), json_last_error_msg()), array());
-    }
-    if (!array_key_exists('geraete', $d) || ($d !== array() && array_values($d) === $d)) {
-        return array(0, fw_t('SICH.KEIN_FUNKWACHT'), array());
-    }
-    $vorgaben = fw_vorgaben();
-    /* 1.0.19: der Vermerk kommt nie aus einer Datei; die Regeln werden geprueft, ungueltige fallen heraus. */
-    unset($d['ansage_token_herkunft']);
-    $fw_rs = null;
-    if (array_key_exists('ansage_regeln', $d)) {
-        $fw_rg = '';
-        $fw_rs = ansage_regeln_wert($d['ansage_regeln'], $fw_rg);
-        unset($d['ansage_regeln']);
-        // 1.0.22: bis 1.0.21 stillschweigend uebergangen, die Datei galt als heil
-        if ($fw_rs === null) {
-            return array(0, fw_t('SICH.ABGEWIESEN'), array('config.ansage_regeln: ' . ansage_kennung_text($fw_rg !== '' ? $fw_rg : 'M_R_BLOCK', fw_ansage_k())));
+    return array();
+}
+
+/**
+ * 1.0.27: Vor dem Speichern, wie bis 1.0.26 nach der Pruefung: der Block tts in der Form des Sprachmoduls und mit
+ * den geltenden Sprechtoken (sie stehen nie in einer Sicherung), die Stick-Zeilen und Zahlen in der Schreibweise der
+ * Konfiguration (true -> 1, Zahltext -> Zahl). Werte sind hier schon geprueft; nichts wird zurechtgebogen.
+ * Gespeichert wird genau, was das Modul liefert (Bauform vom 15.11.2026): bis 1.0.26 ergaenzte "+ $fw_tj" den Block
+ * aus dem geltenden Stand - auch um Felder, die diese Fassung nicht kennt; die fallen jetzt weg und werden genannt.
+ */
+function fw_sicherung_vorbereiten($neu, $jetzt, $r)
+{
+    $tj = fw_tts($jetzt);
+    if (!in_array('tts', $r['fehlt_behalten'], true) && isset($neu['tts']) && is_array($neu['tts'])) {
+        $g = '';
+        $tv = ansage_wert_pruefen(ansage_sicherung_bereinigen($neu['tts']), $g, fw_ansage_modi());
+        if (is_array($tv)) {
+            list($tv) = ansage_vervollstaendigen($tv);
+            $neu['tts'] = ansage_sicherung_tokens_behalten($tv, $tj);
         }
     }
-    /* Nr. 36 b (Stufe 2): eine Sicherung dieses Plugins traegt nie ein Sprechtoken - traegt die Datei
-     * eines, wird sie abgewiesen; das geltende Token bleibt. */
-    if (array_key_exists('tts', $d)) {
-        $fw_tm = ansage_sicherung_mangel($d['tts']);
-        if ($fw_tm) {
-            return array(0, fw_t('SICH.ABGEWIESEN'), array(sprintf(fw_t('DURCHSAGE.SICH_TOKEN'), implode(', ', $fw_tm))));
-        }
-    }
-    list($mangel, ) = fw_sicherung_pruefen($d);
-    if ($mangel) {
-        return array(0, fw_t('SICH.ABGEWIESEN'), $mangel);
-    }
-    /* Alles geprueft: uebernommen wird genau der Inhalt der Datei, nur in
-     * der Schreibweise der Konfiguration (true -> 1, Zahltext -> Zahl). */
-    $neu = array();
-    $fw_jetzt = fw_config(false);
-    $fw_behalten = array();
-    foreach (array_keys($vorgaben) as $k) {
-        if (!array_key_exists($k, $d)) {      // nur die Ansage und die Haken von 1.0.17 (fw_sicherung_pruefen())
-            $neu[$k] = $fw_jetzt[$k];
-            $fw_behalten[] = $k;
-            continue;
-        }
-        $neu[$k] = $d[$k];
-    }
-    if ($fw_rs !== null) { $neu['ansage_regeln'] = $fw_rs; }     // 1.0.19
-    /* Nr. 36 b: der Block tts vervollstaendigt, die geltenden Sprechtoken behalten. */
-    $fw_spaet = array();     // Welle Mehrfach-Ziele (1.0.17): Spaetliste - fehlte in der Sicherung, gilt weiter
-    if (!in_array('tts', $fw_behalten, true)) {
-        /* Welle Mehrfach-Ziele (1.0.17): "... + $fw_tj" behielt die geltenden weiteren Ziele einer Sicherung ohne
-         * Liste schon bisher - still. Jetzt geht der Block vorher durch die Spaetliste, und die Meldung nennt sie. */
-        /* Welle Mehrfach-Ziele (Sprachmodul 1.2.1, Spaetliste): fehlt die Liste der weiteren Ziele in der Sicherung (Datei einer
-         * aelteren Fassung), gelten die jetzigen weiteren Ziele weiter - genannt im Hinweis. Eine Sicherung MIT leerer Liste
-         * heisst "keine weiteren Ziele" und wird so uebernommen. */
-        $fw_spaete = array();
-        if (is_array($neu['tts']) && function_exists('ansage_sicherung_spaet')) {
-            list($neu['tts'], $fw_spaete) = ansage_sicherung_spaet($neu['tts'],
-                (isset($fw_jetzt['tts']) && is_array($fw_jetzt['tts'])) ? $fw_jetzt['tts'] : null);
-        }
-        foreach ($fw_spaete as $fw_sn) { $fw_spaet[] = $fw_sn; }     // Welle Mehrfach-Ziele: tts.ziele (Spaetliste)
-        $fw_tj = fw_tts($fw_jetzt);
-        $fw_tg = '';
-        list($fw_tv) = ansage_vervollstaendigen(ansage_wert_pruefen($neu['tts'], $fw_tg, fw_ansage_modi()) + $fw_tj);
-        $neu['tts'] = ansage_sicherung_tokens_behalten($fw_tv, $fw_tj);
-    }
-    $anzahl = 0;
+    if (!isset($neu['geraete']) || !is_array($neu['geraete'])) { $neu['geraete'] = array(); }
     foreach ($neu['geraete'] as $i => $g) {
-        $neu['geraete'][$i] = fw_geraet_geradebiegen($g);
-        if ($neu['geraete'][$i]['name'] !== '') { $anzahl++; }
+        $neu['geraete'][$i] = fw_geraet_geradebiegen(is_array($g) ? $g : array());
     }
-    foreach (array_keys(fw_betrieb_zahlen()) as $k) { $neu[$k] = (int) $neu[$k]; }
+    foreach (array_keys(fw_betrieb_zahlen()) as $k) {
+        if (isset($neu[$k])) { $neu[$k] = (int) $neu[$k]; }
+    }
     $neu['zeilen'] = (int) $neu['zeilen'];
     foreach (array('mqtt_ein', 'global_aus', 'melden_aktiv', 'signal_ein', 'ansage_gestoert', 'ansage_wieder', 'befehle_mqtt_ein', 'endpunkt_ein') as $k) {
-        $neu[$k] = $neu[$k] ? 1 : 0;
+        $neu[$k] = !empty($neu[$k]) ? 1 : 0;
     }
     $neu['broker_port'] = (string) $neu['broker_port'];
-    if (!fw_config_speichern($neu)) {
-        return array(0, fw_t('FEHLER.SPEICHERN'), array());
-    }
-    fw_log('Einstellungen aus einer Sicherung zurueckgespielt.');
-    return array(1, sprintf(fw_t('SICH.OK'), $anzahl)
-                    . ($fw_behalten ? ' ' . sprintf(fw_t('DURCHSAGE.SICH_BEHALTEN'), implode(', ', $fw_behalten)) : '')
-                    . ($fw_spaet ? ' ' . sprintf(fw_t('EINST.SICH_SPAET'), implode(', ', $fw_spaet)) : ''),
-                 array());
+    return $neu;
+}
+
+/** 1.0.27: Die Sicherung als Feld (Kopf mit _plugin, _fassung, _stand; Einstellungen; Teil "zugang"). */
+function fw_sicherung_daten()
+{
+    return sicherung_bauen(fw_sicherung_beschreibung(), fw_config(), array('zugang' => fw_sicherung_zugang_jetzt()));
+}
+
+/**
+ * X-3 (Welle 4), seit 1.0.27 ueber das Modul: Welche gespeicherten Werte wuerde das eigene Zurueckspielen abweisen?
+ * Gefragt wird DIESELBE Pruefung mit der Datei, die "Einstellungen sichern" liefern wuerde. Rueckgabe: die Namen
+ * (leer: die Sicherung liesse sich zurueckspielen), nie Werte.
+ */
+function fw_sicherung_altwerte()
+{
+    $b = fw_sicherung_beschreibung();
+    $cfg = fw_config();
+    return sicherung_selbstpruefung($b, sicherung_bauen($b, $cfg, array('zugang' => fw_sicherung_zugang_jetzt())), $cfg);
 }
 
 /* ==================================================================

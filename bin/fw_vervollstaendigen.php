@@ -46,5 +46,8 @@ putenv('LBPPLUGINDIR=' . $fw_o);
 require_once $fw_lib;
 
 $fw_e = fw_config_vervollstaendigen();
-echo 'VERVOLLSTAENDIGEN;STAND=' . $fw_e['stand'] . ';SCHLUESSEL=' . implode(',', $fw_e['schluessel']) . "\n";
+/* 1.0.27: KENNWORT = Uebergang des Broker-Kennworts nach zugang.json (kein|uebernommen|fehler), vor STAND, damit
+ * SCHLUESSEL das letzte Feld bleibt (postupgrade.sh liest es bis zum Zeilenende). */
+echo 'VERVOLLSTAENDIGEN;KENNWORT=' . (isset($fw_e['kennwort']) ? $fw_e['kennwort'] : 'kein') . ';STAND=' . $fw_e['stand']
+     . ';SCHLUESSEL=' . implode(',', $fw_e['schluessel']) . "\n";
 exit(in_array($fw_e['stand'], array('ruht', 'ohne_datei', 'ohne_merkwort', 'vollstaendig', 'ergaenzt'), true) ? 0 : 1);
