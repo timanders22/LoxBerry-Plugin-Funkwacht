@@ -900,7 +900,8 @@ foreach ($fw_geraete as $fw_g) {
 
 $fw_rahmen = class_exists('LBWeb', false);
 if ($fw_rahmen) {
-    LBWeb::lbheader(fw_t('ALLG.TITEL'), 'https://wiki.loxberry.de/', 'help.html');
+    require_once __DIR__ . '/fassung.php';   // Fassung im Titel: gemeinsames Stueck fassung.php (21.11.2026)
+    LBWeb::lbheader(plugin_kopftitel(fw_t('ALLG.TITEL'), __DIR__), 'https://wiki.loxberry.de/', 'help.html');
 }
 ?>
 <style>
