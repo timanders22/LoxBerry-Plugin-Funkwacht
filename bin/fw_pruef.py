@@ -52,7 +52,21 @@ from __future__ import annotations
 
 import re
 
-FASSUNG = "1.2.0"
+
+def kern_fassung() -> str:
+    """Die Fassung in der Schlusszeile des Selbsttests: die installierte Fassung des Plugins aus
+    bin/fw_fassung.py (Entscheidung des Hausherrn 22.11.2026, keine fest eingetragene Zahl). Bis 1.0.29 stand hier
+    eine eigene Zaehlung des Kerns, die seit 1.0.0 nie nachgezogen wurde. Ohne Fassung "ohne Fassungsangabe"
+    wie beim Mithoerer und der Suchhilfe. Erst beim Aufruf geladen, ohne Bytecode: der Kern bleibt beim
+    Import ohne Seiteneffekt."""
+    import sys
+    sys.dont_write_bytecode = True
+    try:
+        import fw_fassung
+    except ImportError:
+        return "ohne Fassungsangabe"
+    return fw_fassung.plugin_fassung() or "ohne Fassungsangabe"
+
 
 # Die Stufen, in der Reihenfolge ihrer Wucht.
 STUFE_DIENST = 1
@@ -851,7 +865,7 @@ def selbsttest() -> tuple:
            geraet_geradebiegen({"name": "Z", "art": a})["art"], a)
 
     kopf = "Funkwacht-Kern %s: %d Faelle geprueft, %d Fehlschlaege." % (
-        FASSUNG, stand["n"], stand["f"])
+        kern_fassung(), stand["n"], stand["f"])
     return stand["n"], stand["f"], kopf + "\n\n" + "\n".join(zeilen)
 
 

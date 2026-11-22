@@ -2357,7 +2357,7 @@ def main():
         # im zweiten Teil, der dort nicht mitzaehlt, waere unsichtbar.
         kopf, _, rest = text.partition("\n")
         print("Funkwacht-Kern %s und Dienst: %d Faelle geprueft, %d Fehlschlaege."
-              % (fw_pruef.FASSUNG, n + n2, f + f2))
+              % (fw_pruef.kern_fassung(), n + n2, f + f2))
         print(rest.lstrip("\n"))
         print("\n".join(zeilen))
         return 1 if (f + f2) else 0
@@ -2372,7 +2372,8 @@ def main():
         f = faehigkeiten()
         f["systemgeraete"] = systemgeraete()
         f["fassung"] = fw_fassung.plugin_fassung()
-        f["kern"] = fw_pruef.FASSUNG
+        # 1.0.30: der Kern traegt keine eigene Nummer mehr, er hat die Fassung des Plugins (leer, wenn unbekannt).
+        f["kern"] = f["fassung"]
         f["betriebsdauer"] = betriebsdauer()
         print(json.dumps(f, ensure_ascii=False, indent=1))
         return 0

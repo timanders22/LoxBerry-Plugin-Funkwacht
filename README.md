@@ -4,10 +4,14 @@
 Merkt, wenn ein Stick verstummt, weckt ihn in Stufen wieder auf — und misst
 nach, ob es geholfen hat.
 
-Version 1.0.29 · LoxBerry ab 3.0 · PHP 7.4 und 8.x · Python 3 mit paho-mqtt
+Version 1.0.30 · LoxBerry ab 3.0 · PHP 7.4 und 8.x · Python 3 mit paho-mqtt
 (Debian-Paket, über `dpkg/apt`)
 
 ---
+
+## Neu in 1.0.30
+
+- **Geändert – keine eigene Nummer des Rechenkerns mehr (Entscheidung des Hausherrn 22.11.2026):** Die Schlusszeile des Selbsttests („Funkwacht-Kern … und Dienst: … Fälle geprüft“) und das Feld `kern` der Fähigkeitsdatei nennen jetzt die installierte Fassung des Plugins aus `bin/fw_fassung.py`, wie Mithörer und Suchhilfe. Bis 1.0.29 stand dort fest „1.2.0“, eine eigene Zählung des Kerns, die seit 1.0.0 nie nachgezogen wurde. Ist keine Fassung feststellbar, steht in der Schlusszeile „ohne Fassungsangabe“ und im Feld `kern` nichts. Gemessen auf dem Arbeitsrechner (Python, nachgebildete Installation); am Gerät nicht gemessen.
 
 ## Neu in 1.0.29
 
