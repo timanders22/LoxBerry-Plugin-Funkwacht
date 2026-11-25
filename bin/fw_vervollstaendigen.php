@@ -45,7 +45,7 @@ if (!is_file($fw_lib)) {
 putenv('LBPPLUGINDIR=' . $fw_o);
 require_once $fw_lib;
 
-$fw_e = fw_config_vervollstaendigen();
+$fw_e = fw_dienst_pflege();     // 1.0.32: vervollstaendigen und Lade-Beanstandungen einmal melden (Regeln/05)
 /* 1.0.27: KENNWORT = Uebergang des Broker-Kennworts nach zugang.json (kein|uebernommen|fehler), vor STAND, damit
  * SCHLUESSEL das letzte Feld bleibt (postupgrade.sh liest es bis zum Zeilenende). */
 echo 'VERVOLLSTAENDIGEN;KENNWORT=' . (isset($fw_e['kennwort']) ? $fw_e['kennwort'] : 'kein') . ';STAND=' . $fw_e['stand']

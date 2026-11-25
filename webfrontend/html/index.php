@@ -51,7 +51,9 @@ $fw_ist = isset($_GET['token']) && is_string($_GET['token']) ? $_GET['token'] : 
  * Plugin erzeugt, gilt wie "kein Token gesetzt". Bis 1.0.8 wurde aus einem
  * zurueckgespielten ["x"] mit (string) das Wort Array - und jeder im Netz
  * konnte mit token=Array quittieren und die Wartung schalten. */
-if (!fw_token_gueltig($fw_soll)) {
+/* 1.0.32 (Entscheidung des Hausherrn 24.11.2026, Punkt 2 und 11): ein formwidriges, nicht leeres Wortzeichen gilt
+ * weiter (gemeldet ueber fw_lade_beanstandungen()); kein Text (Liste, Zahl) gilt weiter wie keines (U3). */
+if (!is_string($fw_soll) || trim($fw_soll) === '') {
     http_response_code(403);
     echo "FEHLER;OK=0;GRUND=KEIN_TOKEN_GESETZT\n";
     echo ($fw_soll === ''

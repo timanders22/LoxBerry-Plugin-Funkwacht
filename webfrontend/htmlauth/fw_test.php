@@ -517,6 +517,10 @@ function fw_test_selbstpruefung()
     list($a_ok, $a_txt) = fw_pruefe_ansage();
     $o[] = fw_pruefzeile(fw_klartext('DURCHSAGE.PRUEF'), $a_ok, $a_txt);
 
+    // 1.0.32: faellt das Themen-Praefix auf einen gemeinsamen Bereich unter haus/ (Regeln/07)?
+    $fw_hb = fw_pruef_praefix_haus($cfg);
+    $o[] = fw_pruefzeile(fw_klartext('HAUSBEREICH.F_TEST'),
+                         $fw_hb[0] === 1 ? true : ($fw_hb[0] === 0 ? false : null), $fw_hb[1]);
     list($t_ok, $t_txt) = fw_probe_themen();
     $o[] = fw_pruefzeile(fw_klartext('TEST.P_F_THEMEN'), $t_ok, $t_txt);
 
@@ -535,6 +539,13 @@ function fw_test_selbstpruefung()
     } else {
         $o[] = fw_pruefzeile(fw_klartext('BEFEHL.F_BRUECKE'), null, fw_klartext('BEFEHL.T_AUS'));
     }
+
+    /* 1.0.32: Lade-Beanstandungen (Regeln/05, Sicherungsmodul 1.3.0) - [ !! ], solange ein gespeicherter Wert beim
+     * Laden nicht so gilt, wie er gespeichert ist. */
+    $fw_lb = fw_lade_b(false);
+    $fw_la = fw_lade_beanstandungen(null, false);
+    $o[] = fw_pruefzeile(sicherung_t('K_LADE_FRAGE', $fw_lb), !$fw_la,
+        $fw_la ? implode(' ', sicherung_lade_saetze($fw_lb, $fw_la)) : sicherung_t('K_LADE_KEINE', $fw_lb));
 
     list($n_ok, $n_kreuz, $n_ohne) = fw_pruefzeile(null);
     $o[] = '';

@@ -83,6 +83,7 @@ sys.dont_write_bytecode = True
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import fw_pruef  # noqa: E402
 import fw_fassung  # noqa: E402
+from haus_bereiche import HB_BEREICHE, hb_melden_faellig, hb_logtext  # noqa: E402  (1.0.32, Regeln/07)
 
 laeuft = True
 
@@ -301,7 +302,50 @@ def config() -> dict:
     c["log_kb"] = int(max(16, min(20000, fw_pruef.zahl(c["log_kb"], 500))))
     c["verlauf_tage"] = int(max(1, min(730, fw_pruef.zahl(c["verlauf_tage"], 90))))
     c["geraete"] = [fw_pruef.geraet_geradebiegen(g) for g in (c.get("geraete") or [])]
+    # 1.0.32 (Entscheidung des Hausherrn 24.11.2026, Punkt 17): dieselbe Normalform wie fw_config() der Oberflaeche
+    # (fw_lib.php) - sonst sendete der Dienst unter dem rohen Thema, waehrend die Meldung das bereinigte als verwendet
+    # nannte, und ein Haken "0" galt hier als an. Geprueft mit fw_normform_pruefen.py gegen den PHP-Block selbst.
+    for k in HAKEN_WIE_PHP:
+        if k in c:
+            c[k] = 0 if _php_leer(c[k]) else 1
+    for k in ("ruhe_von", "ruhe_bis"):
+        if k in c:
+            t = _php_text(c[k])
+            c[k] = t if re.match(r"^([01][0-9]|2[0-3]):[0-5][0-9]$", t) else ""
+    t = re.sub(r"[^A-Za-z0-9_/\-]", "", _php_text(c.get("mqtt_topic")))
+    c["mqtt_topic"] = t.strip("/") or "funkwacht"
     return c
+
+
+# Die Haken, die fw_config() mit empty() auf 0/1 bringt (fw_lib.php, dieselbe Liste).
+HAKEN_WIE_PHP = ("mqtt_ein", "global_aus", "melden_aktiv", "signal_ein", "ansage_gestoert", "ansage_wieder",
+                 "befehle_mqtt_ein", "endpunkt_ein")
+
+
+def _php_leer(v) -> bool:
+    """Wie PHP empty(): None, False, 0, 0.0, '', '0', leere Liste/Zuordnung."""
+    if v is None or v is False:
+        return True
+    if isinstance(v, (int, float)) and not isinstance(v, bool):
+        return v == 0
+    if isinstance(v, str):
+        return v in ("", "0")
+    if isinstance(v, (list, dict)):
+        return len(v) == 0
+    return False
+
+
+def _php_text(v) -> str:
+    """Wie PHP (string): None -> '', True -> '1', False -> '', Liste/Zuordnung -> 'Array', Zahl als Text."""
+    if v is None or v is False:
+        return ""
+    if v is True:
+        return "1"
+    if isinstance(v, (list, dict)):
+        return "Array"
+    if isinstance(v, float) and v.is_integer():
+        return str(int(v))
+    return str(v)
 
 
 # ======================================================================
@@ -897,30 +941,10 @@ def benachrichtigen(cfg, schwere, text):
             rc, _ = befehl(["php", helfer, str(int(schwere)), text,
                             pfade()["plugin"]], 20)
             ok = (rc == 0)
-    if cfg.get("signal_ein") and str(cfg.get("signal_url") or "").strip():
-        signal_senden(str(cfg["signal_url"]).strip(), text)
+    # 1.0.32 (Entscheidung des Hausherrn 24.11.2026, F1 "Abloesen"): an SignalBot geht die Meldung nicht mehr hier ueber
+    # die Adresse signal_url, sondern je Stick ueber bin/fw_ansage.php und das gemeinsame Modul meldung.php (Thema
+    # haus/meldung/<ordner>, mit dem Grund der Stoerung); der Schalter signal_ein gilt weiter (fw_meld_aus_cfg()).
     return ok
-
-
-def signal_senden(url, text):
-    """Einen Satz an den SignalBot schicken.
-
-    Die Adresse steht vollstaendig in der Konfiguration, samt Wortzeichen des
-    SignalBot - sie wird NICHT zusammengebaut. Ein zusammengebauter Endpunkt
-    waere eine Vermutung ueber ein fremdes Plugin; eine Adresse zum
-    Abschreiben ist eine Angabe des Anwenders.
-    """
-    import urllib.parse
-    import urllib.request
-    try:
-        trenner = "&" if "?" in url else "?"
-        voll = url + trenner + urllib.parse.urlencode({"text": text})
-        req = urllib.request.Request(voll, headers={"User-Agent": "LoxBerry-Funkwacht"})
-        with urllib.request.urlopen(req, timeout=10) as a:
-            return 200 <= a.status < 300
-    except Exception as e:
-        log("SignalBot: %s" % e, "signal_fehler")
-        return False
 
 
 # ======================================================================
@@ -1954,8 +1978,9 @@ def ansagen(meldungen):
     helfer = os.path.join(os.path.dirname(os.path.abspath(__file__)), "fw_ansage.php")
     if not os.path.isfile(helfer):
         return
-    for nr, name, ok, _grund in meldungen:
-        auftrag = json.dumps({"anlass": "wieder" if ok else "gestoert", "nr": int(nr), "name": name})
+    for nr, name, ok, grund in meldungen:
+        # 1.0.32: dazu der Grund (Kuerzel aus fw_pruef) - die Meldung an SignalBot traegt ihn, die Ansage nicht
+        auftrag = json.dumps({"anlass": "wieder" if ok else "gestoert", "nr": int(nr), "name": name, "grund": str(grund or "")})
         rc, aus = befehl(["php", helfer], 30, auftrag)
         if rc not in (0, 1, 3):
             log("Ansage: Aufruf von fw_ansage.php gescheitert (rc %d: %s)" % (rc, aus.strip()[:160]),
@@ -1974,6 +1999,16 @@ def zaehler_weiter() -> int:
     return _zaehler
 
 
+def praefix_haus_melden(praefix):
+    """1.0.32 (Entscheidung des Hausherrn 23.11.2026 "Nur gemeinsame Bereiche", Regeln/07): einmal je
+    Aenderung eine Protokollzeile, solange das Praefix auf einen gemeinsamen Bereich unter haus/ faellt; der
+    Versand bleibt, wie er ist. Rueckgabe der gemeldete Bereich oder "" (gemeinsames Modul haus_bereiche.py)."""
+    bereich = hb_melden_faellig(praefix)
+    if bereich:
+        log(hb_logtext(praefix, bereich))
+    return bereich
+
+
 def veroeffentlichen(cfg, stand):
     global _altlast_naechster, _sticks_naechster, _voll_naechster
     # M5: vor dem Schalter - auch "MQTT aus" hinterlaesst ein Praefix.
@@ -1981,6 +2016,7 @@ def veroeffentlichen(cfg, stand):
     if not cfg.get("mqtt_ein"):
         return
     praefix = cfg["mqtt_topic"].strip("/")
+    praefix_haus_melden(praefix)   # 1.0.32: im gemeinsamen Bereich? melden, nicht anhalten
     # Zuerst die Altwerte frueherer Fassungen abraeumen, UNMITTELBAR danach
     # geht der gueltige Wert (fluechtig) hinaus - die leere Nutzlast steht
     # so nur Sekunden im Miniserver. Scheitert es, kommt der naechste
@@ -2468,6 +2504,7 @@ def main():
         if not json_schreiben(p["historie"], hist):
             log("historie.json liess sich nicht schreiben - Zaehler und Verlauf dieses "
                 "Durchlaufs fehlen.", "schreiben_historie", kb=cfg["log_kb"])
+        neu["haus_bereiche"] = list(HB_BEREICHE)   # 1.0.32: der Reiter Test vergleicht sie mit der Oberflaeche
         if not json_schreiben(p["stand"], neu):
             log("stand.json liess sich nicht schreiben - Oberflaeche und Endpunkt zeigen "
                 "den vorigen Stand.", "schreiben_stand", kb=cfg["log_kb"])

@@ -450,17 +450,7 @@ if ($fw_post && isset($_POST['speichern_geraete'])) {
     $fw_cfg['global_aus']   = !empty($_POST['global_aus']) ? 1 : 0;
     $fw_cfg['melden_aktiv'] = !empty($_POST['melden_aktiv']) ? 1 : 0;
     $fw_cfg['signal_ein']   = !empty($_POST['signal_ein']) ? 1 : 0;
-    $fw_sig = isset($_POST['signal_url']) && is_string($_POST['signal_url']) ? trim($_POST['signal_url']) : '';
-    if ($fw_sig !== '' && !preg_match('#^https?://[^\s"\']+$#', $fw_sig)) {
-        $fw_fehler[] = sprintf(fw_t('FEHLER.SIGNAL_URL'), $fw_sig);
-        $fw_falsch[] = 'signal_url';
-    } else {
-        $fw_cfg['signal_url'] = $fw_sig;
-    }
-    if ($fw_cfg['signal_ein'] && $fw_cfg['signal_url'] === '') {
-        $fw_fehler[] = fw_t('FEHLER.SIGNAL_LEER');
-        $fw_falsch[] = 'signal_url';
-    }
+    /* 1.0.32: das Feld signal_url entfaellt (Meldung ueber das gemeinsame Modul); der gespeicherte Wert bleibt stehen. */
 
     /* a1: der Hinweis kommt in jedem Fall - auch wenn eine Beanstandung
      * das Speichern verhindert, gehoert er zu derselben Eingabe. */
@@ -587,6 +577,13 @@ if ($fw_post && isset($_POST['speichern_mqtt'])) {
     } elseif (trim($fw_thema, '/') !== $fw_thema) {
         $fw_fehler[] = sprintf(fw_t('FEHLER.THEMA_RAND'), $fw_thema);
         $fw_falsch[] = 'mqtt_topic';
+    } elseif (hb_bereich($fw_thema) !== '' && $fw_thema !== (string) $fw_cfg['mqtt_topic']) {   // nur NEUE Eingaben: ein schon gespeichertes Praefix sperrt das Speichern
+        // des Reiters nicht (Regeln/07; Bauart Einspeisebremse 0.9.25)
+        /* 1.0.32 (Entscheidung des Hausherrn 23.11.2026 "Nur gemeinsame Bereiche", Regeln/07): kein Praefix auf einem
+         * gemeinsamen Bereich unter haus/ - nur hier und beim Zurueckspielen, nicht in der Pruefung beim Lesen der
+         * Konfiguration: ein schon gespeichertes bleibt in Betrieb, der Reiter Test meldet es. */
+        $fw_fehler[] = sprintf(fw_t('HAUSBEREICH.FEHLER'), $fw_thema, hb_bereich($fw_thema));
+        $fw_falsch[] = 'mqtt_topic';
     } else {
         $fw_cfg['mqtt_topic'] = $fw_thema;
     }
@@ -700,7 +697,8 @@ if ($fw_post && isset($_POST['zurueckspielen'])) {
                 if ($zz !== 'ok' && !fw_zugang_speichern($jetzt['broker_pass'])) { return false; }
             }
             unset($neu['broker_pass']);
-            return fw_config_speichern($neu);
+            // 1.0.32: die Werte einer Sicherung sind ausdruecklich - kein "Dateiwert behalten" (Regeln/05)
+            return fw_config_speichern($neu, false, false);
         };
         /* Zwei Paare (Modul 1.2.7): funkwacht.json und, wenn es sie gibt, zugang.json - je mit Zweitschrift. */
         $fw_b['zweitschrift'] = function () {
@@ -827,6 +825,12 @@ if ($fw_post && isset($_POST['log_leeren']) && empty($_POST['sicher_log'])) {
  * Ins Protokoll nur die Kurzform ohne Text und Token. */
 /* Welle Mehrfach-Ziele (Sprachmodul 1.2.1): die Knoepfe "Testansage an Ziel n" schicken ansage_test_ziel=n - es spricht
  * nur dieses Ziel; der bisherige Knopf spricht an alle Ziele gleichzeitig. Eine unbrauchbare Nummer spricht nichts. */
+/* 1.0.32: Testmeldung an SignalBot (Knopf unter den Ansage-Regeln). */
+if ($fw_post && isset($_POST['meld_test'])) {
+    list($meld_ok, $meld_satz) = fw_meld_test();
+    if ($meld_ok) { $fw_meldungen[] = $meld_satz; } else { $fw_misslungen[] = $meld_satz; }
+    $fw_tab = 'tab-test';
+}
 if ($fw_post && (isset($_POST['ansage_test']) || isset($_POST['ansage_test_ziel']))) {
     $fw_tk = fw_ansage_k();
     $fw_tnur = (isset($_POST['ansage_test_ziel']) && fw_mit_zielen()) ? ansage_test_ziel($_POST) : 0;
@@ -861,6 +865,32 @@ if ($fw_post && isset($_POST['test'])) {
     }
     $fw_testausgabe = fw_test_ausfuehren((string) $_POST['test'], $fw_wert);
     $fw_tab = 'tab-test';
+}
+
+/* ---------------- Lade-Beanstandungen: angezeigte Werte uebernehmen (1.0.32) ----------------
+ * Nur mit gesetztem Haken (Entscheidung des Hausherrn 24.11.2026, "Haken im gelben Kasten"); ohne ihn bleibt die Datei
+ * byte-gleich. Geschrieben ohne "Dateiwert behalten". Der Wachposten oben hat $fw_post bei fremdem Merkmal schon
+ * auf false gesetzt. Der Waechter liest die Konfiguration in jedem Durchlauf neu. */
+if ($fw_post && sicherung_lade_eingang($_POST) !== '') {
+    $fw_lb = fw_lade_b(false);
+    if (sicherung_lade_eingang($_POST) !== 'ja') {
+        $fw_fehler[] = sicherung_t('K_LADE_HAKEN_FEHLT', $fw_lb);
+    } else {
+        $fw_ld = fw_lade_roh();
+        $fw_lv = fw_config(false);
+        $fw_un = array();
+        if ($fw_ld !== null) {
+            list($fw_lneu, $fw_un) = sicherung_lade_uebernehmen_stand($fw_ld, $fw_lv, sicherung_lade_beanstandungen($fw_lb, $fw_ld, $fw_lv));
+            if ($fw_un && !fw_config_speichern($fw_lneu, false, false)) {
+                $fw_fehler[] = fw_t('FEHLER.SPEICHERN');
+                $fw_un = array();
+            }
+        }
+        if ($fw_un) {
+            fw_log('Lade-Beanstandungen: angezeigte Werte uebernommen: ' . implode(', ', array_map('sicherung_name', $fw_un)));
+            $fw_meldungen[] = sprintf(sicherung_t('K_LADE_UEBERNOMMEN', $fw_lb), implode(', ', $fw_un));
+        }
+    }
 }
 
 /* ---------------- Nach dem POST: umleiten (U8) ----------------
@@ -1053,6 +1083,9 @@ if ($fw_rahmen) {
 <?php if ($fw_misslungen) { ?>
 <div class="sm-warnung"><b><?= fw_e(fw_t('ALLG.MISSLUNGEN')) ?></b><br><?= implode('<br>', array_map('fw_e', $fw_misslungen)) ?></div>
 <?php } ?>
+<?php /* 1.0.32: Lade-Beanstandungen (Regeln/05) - gelber Kasten im Reiter Einstellungen; einmal je Aenderung ins Protokoll. */
+$fw_lade = fw_lade_beanstandungen();
+fw_lade_melden($fw_lade); ?>
 
 <div class="sm-kacheln">
   <div class="sm-kachel"><?= fw_e(fw_t('ALLG.DIENST')) ?>
@@ -1112,6 +1145,8 @@ if ($fw_rahmen) {
 <!-- ================= Reiter: Einstellungen ================= -->
 <div class="sm-seite<?= $fw_tab === 'tab-settings' ? ' sm-active' : '' ?>" id="tab-settings">
 <div class="sm-hinweis"><?= fw_t('EINST.WAS_IST_DAS') ?></div>
+<?= sicherung_lade_kasten(fw_lade_b(true), isset($fw_lade) ? $fw_lade : fw_lade_beanstandungen(),
+        '<input data-role="none" type="hidden" name="fmt" value="' . fw_e($fw_merkmal) . '"><input data-role="none" type="hidden" name="activetab" value="tab-settings">') ?>
 
 <h2><?= fw_e(fw_t('EINST.H_LAGE')) ?></h2>
 <div class="sm-step"><?= fw_t('EINST.LAGE_ERKLAERUNG') ?></div>
@@ -1369,10 +1404,14 @@ if ($fw_dzeilen) {
 <div class="sm-feld">
   <label><input data-role="none" type="checkbox" name="signal_ein" value="1"<?= fw_eh('settings', 'signal_ein', $fw_cfg['signal_ein']) ? ' checked' : '' ?>> <?= fw_e(fw_t('MELD.L_SIGNAL')) ?></label>
 </div>
+<?php /* 1.0.32: unsichtbarer Doppel des Speicherknopfs VOR dem Knopf Testmeldung (Eingabetaste speichert). */ ?>
+<button data-role="none" type="submit" name="speichern_geraete" value="1" tabindex="-1" aria-hidden="true" style="position:absolute;left:-10000px;top:auto;width:1px;height:1px;overflow:hidden"></button>
+<?php /* 1.0.32: statt der Adresse der Hinweis des gemeinsamen Moduls, die Lage der letzten Meldung und der Knopf Testmeldung
+   (im Speicherformular wie in den uebrigen Linien; davor steht der Doppel des Speicherknopfs, K_ENTER). */
+$fw_mk = fw_meld_k(); list(, $fw_mlage) = meld_pruefzeile(fw_meld_block($fw_cfg), fw_meld_bean($fw_cfg), $fw_mk); ?>
 <div class="sm-feld">
-  <label for="fw_sigurl"><?= fw_e(fw_t('MELD.L_SIGNAL_URL')) ?></label>
-  <input data-role="none" type="text" id="fw_sigurl" name="signal_url" size="70" value="<?= fw_e(fw_ew('settings', 'signal_url', $fw_cfg['signal_url'])) ?>"<?= fw_ek('settings', 'signal_url') ?>>
-  <p class="sm-hilfe"><?= fw_t('MELD.H_SIGNAL_URL') ?></p>
+  <p class="sm-hilfe"><?= fw_e(sprintf(meld_t('HINWEIS', $fw_mk), meld_thema($fw_mk), meld_ordner($fw_mk)) . ' ' . meld_t('F_TEST', $fw_mk) . ' ' . $fw_mlage) ?></p>
+  <div class="sm-knopfreihe"><button data-role="none" class="sm-btn sm-b-aktion" type="submit" name="meld_test" value="1"><?= fw_e(meld_t('K_TEST', $fw_mk)) ?></button></div>
 </div>
 
 <?php /* Nr. 36 b (Stufe 2): Ansage ueber die gemeinsame Sprachausgabe, ab Werk aus. */ ?>
